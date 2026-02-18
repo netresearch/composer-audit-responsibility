@@ -1,0 +1,64 @@
+{
+    "name": "netresearch/composer-audit-responsibility",
+    "description": "Composer plugin implementing responsibility propagation for security audits — stops upstream/framework transitive dependency advisories from blocking library/extension CI",
+    "type": "composer-plugin",
+    "license": "MIT",
+    "keywords": [
+        "composer-plugin",
+        "security",
+        "audit",
+        "framework",
+        "upstream",
+        "responsibility",
+        "typo3",
+        "symfony",
+        "drupal",
+        "laravel",
+        "wordpress",
+        "magento"
+    ],
+    "authors": [
+        {
+            "name": "Netresearch DTT GmbH",
+            "email": "info@netresearch.de",
+            "homepage": "https://www.netresearch.de"
+        }
+    ],
+    "homepage": "https://github.com/netresearch/composer-audit-responsibility",
+    "support": {
+        "issues": "https://github.com/netresearch/composer-audit-responsibility/issues",
+        "source": "https://github.com/netresearch/composer-audit-responsibility"
+    },
+    "require": {
+        "php": ">=8.1",
+        "composer-plugin-api": "^2.6"
+    },
+    "require-dev": {
+        "composer/composer": "^2.9",
+        "phpunit/phpunit": "^10.5 || ^11.0",
+        "phpstan/phpstan": "^2.1"
+    },
+    "autoload": {
+        "psr-4": {
+            "Netresearch\\ComposerAuditResponsibility\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Netresearch\\ComposerAuditResponsibility\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "class": "Netresearch\\ComposerAuditResponsibility\\Plugin"
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "netresearch/composer-audit-responsibility": true
+        }
+    },
+    "scripts": {
+        "test": "phpunit",
+        "stan": "phpstan analyse"
+    }
+}
