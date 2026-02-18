@@ -49,12 +49,19 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
         ];
     }
 
+    /**
+     * Commands that resolve/install dependencies (subject to block-insecure).
+     */
+    private const INSTALL_COMMANDS = ['install', 'update', 'require', 'remove', 'create-project'];
+
     public function onPreCommandRun(PreCommandRunEvent $event): void
     {
         $commandName = $event->getCommand();
 
-        // Only act on commands that perform security blocking
-        if (!\in_array($commandName, ['install', 'update', 'require', 'remove', 'create-project', 'audit'], true)) {
+        $isInstallCommand = \in_array($commandName, self::INSTALL_COMMANDS, true);
+        $isAuditCommand = $commandName === 'audit';
+
+        if (!$isInstallCommand && !$isAuditCommand) {
             return;
         }
 
@@ -62,12 +69,15 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
             return;
         }
 
-        $rootPackage = $this->composer->getPackage();
+        $composer = $this->composer;
+        $io = $this->io;
+
+        $rootPackage = $composer->getPackage();
         $detector = new PlatformDetector();
         $patterns = $detector->detect($rootPackage);
 
         if ($patterns === []) {
-            $this->io->writeError(
+            $io->writeError(
                 '<info>[audit-responsibility]</info> No platform packages detected. '
                 . 'Set extra.audit-responsibility.upstream in composer.json or use a framework-specific package type.',
                 true,
@@ -83,7 +93,7 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
         $responsibilityConfig = $extra['audit-responsibility'] ?? [];
         $blockUpstream = $responsibilityConfig['block-upstream'] ?? false;
         if ($blockUpstream === true) {
-            $this->io->writeError(
+            $io->writeError(
                 '<info>[audit-responsibility]</info> block-upstream is enabled, not filtering advisories.',
                 true,
                 IOInterface::VERBOSE,
@@ -92,13 +102,38 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
             return;
         }
 
-        $locker = $this->composer->getLocker();
-        if (!$locker->isLocked()) {
-            $this->io->writeError(
-                '<info>[audit-responsibility]</info> No lock file found, skipping responsibility analysis.',
+        $locker = $composer->getLocker();
+
+        // For install/update commands: disable block-insecure so deps can resolve,
+        // regardless of whether a lock file exists. The audit command handles
+        // responsibility-aware checking separately.
+        if ($isInstallCommand) {
+            $config = $composer->getConfig();
+            $config->merge([
+                'config' => [
+                    'audit' => [
+                        'block-insecure' => false,
+                    ],
+                ],
+            ]);
+
+            $io->writeError(
+                '<info>[audit-responsibility]</info> Disabled block-insecure for dependency resolution '
+                . '(platform advisories handled via composer audit).',
                 true,
                 IOInterface::VERBOSE,
             );
+        }
+
+        // For audit (and install when lock file exists): inject ignore rules
+        if (!$locker->isLocked()) {
+            if ($isAuditCommand) {
+                $io->writeError(
+                    '<info>[audit-responsibility]</info> No lock file found, skipping responsibility analysis.',
+                    true,
+                    IOInterface::VERBOSE,
+                );
+            }
 
             return;
         }
@@ -108,7 +143,7 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
         // Resolve glob patterns against installed packages
         $platformRoots = $detector->resolvePatterns($patterns, $lockedRepository);
         if ($platformRoots === []) {
-            $this->io->writeError(
+            $io->writeError(
                 '<info>[audit-responsibility]</info> No installed packages match platform patterns: '
                 . implode(', ', $patterns),
                 true,
@@ -118,7 +153,7 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
             return;
         }
 
-        $this->io->writeError(
+        $io->writeError(
             '<info>[audit-responsibility]</info> Platform packages: '
             . implode(', ', $platformRoots),
             true,
@@ -139,7 +174,7 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
         );
 
         if ($platformOnlyPackages === []) {
-            $this->io->writeError(
+            $io->writeError(
                 '<info>[audit-responsibility]</info> No platform-only transitive dependencies found.',
                 true,
                 IOInterface::VERBOSE,
@@ -149,13 +184,13 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
         }
 
         $platformNames = implode(', ', $platformRoots);
-        $this->io->writeError(sprintf(
+        $io->writeError(sprintf(
             '<info>[audit-responsibility]</info> Detected %d platform-only transitive dependencies via %s.',
             \count($platformOnlyPackages),
             $platformNames,
         ));
 
-        $this->io->writeError(
+        $io->writeError(
             '<info>[audit-responsibility]</info> Platform-only packages: '
             . implode(', ', $platformOnlyPackages),
             true,
