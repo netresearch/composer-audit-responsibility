@@ -117,10 +117,15 @@ final class DependencyGraphAnalyzer
     private function bfs(array $packageMap, array $roots, array $barriers = []): array
     {
         $visited = [];
-        $queue = $roots;
+        $queue = new \SplQueue();
 
-        while ($queue !== []) {
-            $current = array_shift($queue);
+        foreach ($roots as $root) {
+            $queue->enqueue($root);
+        }
+
+        while (!$queue->isEmpty()) {
+            /** @var string $current */
+            $current = $queue->dequeue();
 
             if (isset($visited[$current])) {
                 continue;
@@ -147,7 +152,7 @@ final class DependencyGraphAnalyzer
                 }
 
                 if (!isset($visited[$target])) {
-                    $queue[] = $target;
+                    $queue->enqueue($target);
                 }
             }
         }
