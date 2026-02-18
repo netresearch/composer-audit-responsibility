@@ -13,7 +13,7 @@ use Composer\Semver\Semver;
  * Uses the Packagist Security Advisories API to get current advisories,
  * then extracts advisory IDs for packages that are platform-only.
  */
-final class AdvisoryFetcher
+class AdvisoryFetcher
 {
     private const API_URL = 'https://packagist.org/api/security-advisories/';
 
@@ -53,21 +53,8 @@ final class AdvisoryFetcher
         $query = http_build_query(['packages' => $packageNames]);
         $url = self::API_URL . '?' . $query;
 
-        $context = stream_context_create([
-            'http' => [
-                'timeout' => 10,
-                'user_agent' => 'composer-audit-responsibility/0.1',
-            ],
-        ]);
-
-        $response = @file_get_contents($url, false, $context);
-        if ($response === false) {
-            return [];
-        }
-
-        /** @var mixed $data */
-        $data = json_decode($response, true);
-        if (!\is_array($data) || !isset($data['advisories']) || !\is_array($data['advisories'])) {
+        $data = $this->fetchJson($url);
+        if ($data === null || !isset($data['advisories']) || !\is_array($data['advisories'])) {
             return [];
         }
 
@@ -113,5 +100,34 @@ final class AdvisoryFetcher
         }
 
         return $result;
+    }
+
+    /**
+     * Fetch and decode JSON from a URL.
+     *
+     * @return array<string, mixed>|null Decoded JSON data or null on failure
+     */
+    protected function fetchJson(string $url): ?array
+    {
+        $context = stream_context_create([
+            'http' => [
+                'timeout' => 10,
+                'user_agent' => 'composer-audit-responsibility/0.1',
+            ],
+        ]);
+
+        $response = @file_get_contents($url, false, $context);
+        if ($response === false) {
+            return null;
+        }
+
+        /** @var mixed $data */
+        $data = json_decode($response, true);
+        if (!\is_array($data)) {
+            return null;
+        }
+
+        /** @var array<string, mixed> $data */
+        return $data;
     }
 }

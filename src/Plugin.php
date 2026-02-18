@@ -21,7 +21,7 @@ use Composer\Script\ScriptEvents;
  *
  * On audit: injects ignore rules so only user-owned advisories are reported.
  */
-final class Plugin implements PluginInterface, EventSubscriberInterface
+class Plugin implements PluginInterface, EventSubscriberInterface
 {
     private const INSTALL_COMMANDS = ['install', 'update', 'require', 'remove', 'create-project'];
     private const TAG = '<info>[audit-responsibility]</info>';
@@ -45,6 +45,11 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
     }
 
     public function uninstall(Composer $composer, IOInterface $io): void {}
+
+    protected function createAdvisoryFetcher(): AdvisoryFetcher
+    {
+        return new AdvisoryFetcher();
+    }
 
     public static function getSubscribedEvents(): array
     {
@@ -167,7 +172,7 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
         // Check for advisories on user-owned packages (these SHOULD block).
         // Filter by installed version — only advisories affecting the actual
         // installed version should block, not historical advisories for other versions.
-        $fetcher = new AdvisoryFetcher();
+        $fetcher = $this->createAdvisoryFetcher();
         $userAdvisories = $fetcher->fetchAdvisoryIds(
             $userOwnedPackages,
             $lockedRepository,
@@ -331,7 +336,7 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
         ));
 
         $reason = sprintf('Platform dependency via %s (responsibility propagation)', $platformNames);
-        $fetcher = new AdvisoryFetcher();
+        $fetcher = $this->createAdvisoryFetcher();
         $advisoryIgnores = $fetcher->fetchAdvisoryIds($platformOnlyPackages, $lockedRepository, $reason);
 
         if ($advisoryIgnores === []) {

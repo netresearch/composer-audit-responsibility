@@ -292,6 +292,102 @@ final class DependencyGraphAnalyzerTest extends TestCase
         self::assertSame(['doctrine/dbal', 'firebase/php-jwt', 'psr/log', 'symfony/console'], $platformOnly);
     }
 
+    // ──────────────────────────────────────────────
+    // New edge case tests
+    // ──────────────────────────────────────────────
+
+    #[Test]
+    public function classifySkipsVirtualPackages(): void
+    {
+        // Packages like 'php', 'ext-json' that don't contain '/' are skipped by BFS
+        $repository = $this->createRepository([
+            'typo3/cms-core' => ['php', 'ext-json', 'psr/log'],
+            'psr/log' => ['php'],
+        ]);
+
+        $result = $this->analyzer->classify(
+            $repository,
+            platformRoots: ['typo3/cms-core'],
+            directRequires: ['typo3/cms-core'],
+        );
+
+        // Virtual packages should NOT appear in classification
+        self::assertArrayNotHasKey('php', $result);
+        self::assertArrayNotHasKey('ext-json', $result);
+
+        // Real package should still be classified
+        self::assertSame(DependencyOwnership::PlatformOnly, $result['psr/log']);
+    }
+
+    #[Test]
+    public function classifyHandlesOrphanedPackages(): void
+    {
+        // orphaned/package exists in repo but is not reachable from any root
+        $repository = $this->createRepository([
+            'typo3/cms-core' => ['psr/log'],
+            'psr/log' => [],
+            'orphaned/package' => ['some/dep'],
+            'some/dep' => [],
+        ]);
+
+        $result = $this->analyzer->classify(
+            $repository,
+            platformRoots: ['typo3/cms-core'],
+            directRequires: ['typo3/cms-core'],
+        );
+
+        // Orphaned packages should NOT appear in classification
+        self::assertArrayNotHasKey('orphaned/package', $result);
+        self::assertArrayNotHasKey('some/dep', $result);
+
+        // Reachable packages are still classified
+        self::assertSame(DependencyOwnership::Direct, $result['typo3/cms-core']);
+        self::assertSame(DependencyOwnership::PlatformOnly, $result['psr/log']);
+    }
+
+    #[Test]
+    public function classifyHandlesDuplicateDirectRequires(): void
+    {
+        $repository = $this->createRepository([
+            'typo3/cms-core' => ['psr/log'],
+            'psr/log' => [],
+            'my/library' => [],
+        ]);
+
+        // Duplicate entries in directRequires should not cause issues
+        $result = $this->analyzer->classify(
+            $repository,
+            platformRoots: ['typo3/cms-core'],
+            directRequires: ['typo3/cms-core', 'my/library', 'my/library'],
+        );
+
+        self::assertSame(DependencyOwnership::Direct, $result['typo3/cms-core']);
+        self::assertSame(DependencyOwnership::Direct, $result['my/library']);
+        self::assertSame(DependencyOwnership::PlatformOnly, $result['psr/log']);
+    }
+
+    #[Test]
+    public function allEnumCasesHaveStringValues(): void
+    {
+        self::assertSame('direct', DependencyOwnership::Direct->value);
+        self::assertSame('platform-only', DependencyOwnership::PlatformOnly->value);
+        self::assertSame('shared', DependencyOwnership::Shared->value);
+        self::assertSame('user-transitive', DependencyOwnership::UserTransitive->value);
+    }
+
+    #[Test]
+    public function enumFromStringWorksForAllCases(): void
+    {
+        self::assertSame(DependencyOwnership::Direct, DependencyOwnership::from('direct'));
+        self::assertSame(DependencyOwnership::PlatformOnly, DependencyOwnership::from('platform-only'));
+        self::assertSame(DependencyOwnership::Shared, DependencyOwnership::from('shared'));
+        self::assertSame(DependencyOwnership::UserTransitive, DependencyOwnership::from('user-transitive'));
+    }
+
+    // ──────────────────────────────────────────────
+    // Helpers
+    // ──────────────────────────────────────────────
+
     /**
      * @param array<string, list<string>> $adjacency
      */
