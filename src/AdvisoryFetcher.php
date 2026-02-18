@@ -76,7 +76,7 @@ final class AdvisoryFetcher
 
         $result = [];
         foreach ($advisories as $packageName => $packageAdvisories) {
-            if (!\is_string($packageName) || !\is_array($packageAdvisories)) {
+            if (!\is_array($packageAdvisories)) {
                 continue;
             }
 

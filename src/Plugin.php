@@ -44,9 +44,7 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
         $this->io = null;
     }
 
-    public function uninstall(Composer $composer, IOInterface $io): void
-    {
-    }
+    public function uninstall(Composer $composer, IOInterface $io): void {}
 
     public static function getSubscribedEvents(): array
     {
@@ -140,7 +138,7 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
         // Dev dependencies (phpunit, phpstan, etc.) don't ship with the extension;
         // their advisories are reported by `composer audit` but shouldn't block install.
         $directRequires = array_values(array_map(
-            static fn ($link) => $link->getTarget(),
+            static fn($link) => $link->getTarget(),
             $rootPackage->getRequires(),
         ));
 
@@ -304,7 +302,7 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
         // Only production requires — dev dependency advisories are not suppressed
         // and will still appear in `composer audit` output normally.
         $directRequires = array_values(array_map(
-            static fn ($link) => $link->getTarget(),
+            static fn($link) => $link->getTarget(),
             $rootPackage->getRequires(),
         ));
 

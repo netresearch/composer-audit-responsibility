@@ -40,7 +40,7 @@ final class DependencyGraphAnalyzer
         $platformRootSet = array_flip($platformRoots);
         $userRoots = array_values(array_filter(
             $directRequires,
-            static fn (string $name): bool => !isset($platformRootSet[$name]),
+            static fn(string $name): bool => !isset($platformRootSet[$name]),
         ));
 
         // BFS from platform roots → all platform-reachable packages
