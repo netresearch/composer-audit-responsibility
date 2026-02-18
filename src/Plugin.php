@@ -80,16 +80,11 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
             return;
         }
 
-        // For install/update: disable block-insecure so deps resolve
+        // For install/update: disable block-insecure via env var so deps resolve.
+        // AuditConfig reads COMPOSER_NO_SECURITY_BLOCKING before the PoolBuilder runs.
         if ($isInstallCommand) {
-            $config = $composer->getConfig();
-            $config->merge([
-                'config' => [
-                    'audit' => [
-                        'block-insecure' => false,
-                    ],
-                ],
-            ]);
+            $_SERVER['COMPOSER_NO_SECURITY_BLOCKING'] = '1';
+            putenv('COMPOSER_NO_SECURITY_BLOCKING=1');
 
             $this->blockInsecureDisabled = true;
 
