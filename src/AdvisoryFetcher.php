@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Netresearch\ComposerAuditResponsibility;
 
 use Composer\Repository\RepositoryInterface;
+use Composer\Semver\Semver;
 
 /**
  * Fetches security advisories from Packagist for specific packages.
@@ -19,8 +20,14 @@ final class AdvisoryFetcher
     /**
      * Fetch advisory IDs for the given packages from the locked repository.
      *
-     * @param list<string>        $packageNames Package names to check
-     * @param RepositoryInterface $repository   Locked repository with installed versions
+     * When $filterByInstalledVersion is true, only advisories whose affectedVersions
+     * constraint matches the installed version are returned. When false (default for
+     * audit ignore injection), all advisories are returned so Composer's own version
+     * matching can handle the filtering.
+     *
+     * @param list<string>        $packageNames            Package names to check
+     * @param RepositoryInterface $repository              Locked repository with installed versions
+     * @param bool                $filterByInstalledVersion Whether to filter by installed version
      *
      * @return array<string, string> Advisory ID → reason (for injection into audit.ignore)
      */
@@ -28,9 +35,18 @@ final class AdvisoryFetcher
         array $packageNames,
         RepositoryInterface $repository,
         string $reason,
+        bool $filterByInstalledVersion = false,
     ): array {
         if ($packageNames === []) {
             return [];
+        }
+
+        // Build installed version map for filtering
+        $installedVersions = [];
+        if ($filterByInstalledVersion) {
+            foreach ($repository->getPackages() as $package) {
+                $installedVersions[$package->getName()] = $package->getVersion();
+            }
         }
 
         // Build API query
@@ -60,7 +76,7 @@ final class AdvisoryFetcher
 
         $result = [];
         foreach ($advisories as $packageName => $packageAdvisories) {
-            if (!\is_array($packageAdvisories)) {
+            if (!\is_string($packageName) || !\is_array($packageAdvisories)) {
                 continue;
             }
 
@@ -75,8 +91,23 @@ final class AdvisoryFetcher
                     continue;
                 }
 
-                // Include all advisories for platform-only packages; Composer does
-                // its own version matching during the security check
+                // When filtering by installed version, skip advisories that don't
+                // affect the installed version of this package.
+                if ($filterByInstalledVersion) {
+                    $affectedVersions = $advisory['affectedVersions'] ?? null;
+                    $installedVersion = $installedVersions[$packageName] ?? null;
+
+                    if (\is_string($affectedVersions) && \is_string($installedVersion)) {
+                        try {
+                            if (!Semver::satisfies($installedVersion, $affectedVersions)) {
+                                continue;
+                            }
+                        } catch (\Throwable) {
+                            // If constraint parsing fails, include the advisory conservatively
+                        }
+                    }
+                }
+
                 $result[$advisoryId] = $reason;
             }
         }

@@ -10,7 +10,6 @@ use Composer\IO\IOInterface;
 use Composer\Plugin\PluginEvents;
 use Composer\Plugin\PluginInterface;
 use Composer\Plugin\PreCommandRunEvent;
-use Composer\Repository\RepositoryInterface;
 use Composer\Script\Event as ScriptEvent;
 use Composer\Script\ScriptEvents;
 
@@ -137,16 +136,17 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
             return;
         }
 
+        // Only production requires for blocking classification.
+        // Dev dependencies (phpunit, phpstan, etc.) don't ship with the extension;
+        // their advisories are reported by `composer audit` but shouldn't block install.
         $directRequires = array_values(array_map(
             static fn ($link) => $link->getTarget(),
-            array_merge($rootPackage->getRequires(), $rootPackage->getDevRequires()),
+            $rootPackage->getRequires(),
         ));
 
         $analyzer = new DependencyGraphAnalyzer();
         $classifications = $analyzer->classify($lockedRepository, $platformRoots, $directRequires);
 
-        // Fetch ALL advisories for ALL installed packages
-        $allPackageNames = array_keys($classifications);
         $platformNames = implode(', ', $platformRoots);
 
         $platformOnlyPackages = [];
@@ -166,19 +166,24 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
             \count($userOwnedPackages),
         ), true, IOInterface::VERBOSE);
 
-        // Check for advisories on user-owned packages (these SHOULD block)
+        // Check for advisories on user-owned packages (these SHOULD block).
+        // Filter by installed version — only advisories affecting the actual
+        // installed version should block, not historical advisories for other versions.
         $fetcher = new AdvisoryFetcher();
         $userAdvisories = $fetcher->fetchAdvisoryIds(
             $userOwnedPackages,
             $lockedRepository,
             'User-owned dependency',
+            filterByInstalledVersion: true,
         );
 
-        // Check for advisories on platform-only packages (informational)
+        // Check for advisories on platform-only packages (informational).
+        // Also filter by installed version for accurate reporting.
         $platformAdvisories = $fetcher->fetchAdvisoryIds(
             $platformOnlyPackages,
             $lockedRepository,
             'Platform dependency via ' . $platformNames,
+            filterByInstalledVersion: true,
         );
 
         // Report platform-only advisories (suppressed)
@@ -296,9 +301,11 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
             IOInterface::VERBOSE,
         );
 
+        // Only production requires — dev dependency advisories are not suppressed
+        // and will still appear in `composer audit` output normally.
         $directRequires = array_values(array_map(
             static fn ($link) => $link->getTarget(),
-            array_merge($rootPackage->getRequires(), $rootPackage->getDevRequires()),
+            $rootPackage->getRequires(),
         ));
 
         $analyzer = new DependencyGraphAnalyzer();
