@@ -10,7 +10,7 @@ Stops upstream/framework transitive dependency advisories from blocking your lib
 
 ## The Problem
 
-Since Composer 2.9, `composer install` blocks when any transitive dependency has a security advisory (`block-insecure` defaults to `true`). For library/extension developers, this means:
+Since Composer 2.9, [`block-insecure`](https://getcomposer.org/doc/06-config.md#block-insecure) defaults to `true`, blocking any package version with a security advisory during `composer update`, `require`, or `remove` (and `install` without a lock file, which triggers dependency resolution). For library/extension developers, this means:
 
 - Your **TYPO3 extension** requires `typo3/cms-core` for compatibility
 - `typo3/cms-core` transitively depends on `firebase/php-jwt`
@@ -25,7 +25,7 @@ This affects every framework ecosystem: Drupal modules, Symfony bundles, Laravel
 **1. Disable the security check entirely**
 
 ```bash
-COMPOSER_NO_SECURITY_BLOCKING=1 composer install
+COMPOSER_NO_SECURITY_BLOCKING=1 composer update
 ```
 
 This silences **all** advisories — including ones in your own dependencies that you *can* and *should* fix. You lose the safety net completely. A real vulnerability in a package you chose goes unnoticed.
@@ -59,7 +59,7 @@ Security responsibility follows the dependency chain:
 | **Framework team** | Framework's transitive dependencies |
 | **Application/Project assembler** | Everything (they ship the final product) |
 
-This plugin automatically detects your framework dependencies and prevents their transitive security advisories from blocking your `composer install/update`. Advisories are still **reported** — they just don't **block**.
+This plugin automatically detects your framework dependencies and prevents their transitive security advisories from blocking dependency resolution (`composer update/require/remove`). Advisories are still **reported** — they just don't **block**.
 
 ## Installation
 
