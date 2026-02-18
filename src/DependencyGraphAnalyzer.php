@@ -13,6 +13,7 @@ use Composer\Repository\RepositoryInterface;
  * Walks the installed package repository using BFS from two starting sets:
  * 1. Platform roots (framework packages) → marks platform-reachable packages
  * 2. User roots (direct deps minus platform) → marks user-reachable packages
+ *    User BFS treats platform packages as opaque barriers — it does NOT traverse into them.
  *
  * The intersection determines shared ownership; the difference determines
  * platform-only packages whose advisories should not block installation.
@@ -45,8 +46,10 @@ final class DependencyGraphAnalyzer
         // BFS from platform roots → all platform-reachable packages
         $platformReachable = $this->bfs($packageMap, $platformRoots);
 
-        // BFS from user roots → all user-reachable packages
-        $userReachable = $this->bfs($packageMap, $userRoots);
+        // BFS from user roots, but do NOT traverse INTO platform packages.
+        // This prevents user deps like "my/lib → guzzle" from also reaching
+        // framework transitive deps when user/platform share a dependency.
+        $userReachable = $this->bfs($packageMap, $userRoots, $platformRootSet);
 
         // Classify each installed package
         $result = [];
@@ -107,10 +110,11 @@ final class DependencyGraphAnalyzer
      *
      * @param array<string, PackageInterface> $packageMap
      * @param list<string>                    $roots
+     * @param array<string, int>              $barriers Package names to NOT traverse into (visited but not expanded)
      *
      * @return array<string, true> Set of reachable package names
      */
-    private function bfs(array $packageMap, array $roots): array
+    private function bfs(array $packageMap, array $roots, array $barriers = []): array
     {
         $visited = [];
         $queue = $roots;
@@ -123,6 +127,11 @@ final class DependencyGraphAnalyzer
             }
 
             $visited[$current] = true;
+
+            // If this package is a barrier, mark it as visited but don't expand its deps
+            if (isset($barriers[$current])) {
+                continue;
+            }
 
             $package = $packageMap[$current] ?? null;
             if ($package === null) {

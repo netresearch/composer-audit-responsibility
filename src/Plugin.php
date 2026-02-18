@@ -64,9 +64,9 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
 
         $rootPackage = $this->composer->getPackage();
         $detector = new PlatformDetector();
-        $platformRoots = $detector->detect($rootPackage);
+        $patterns = $detector->detect($rootPackage);
 
-        if ($platformRoots === []) {
+        if ($patterns === []) {
             $this->io->writeError(
                 '<info>[audit-responsibility]</info> No platform packages detected. '
                 . 'Set extra.audit-responsibility.upstream in composer.json or use a framework-specific package type.',
@@ -104,6 +104,27 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
         }
 
         $lockedRepository = $locker->getLockedRepository();
+
+        // Resolve glob patterns against installed packages
+        $platformRoots = $detector->resolvePatterns($patterns, $lockedRepository);
+        if ($platformRoots === []) {
+            $this->io->writeError(
+                '<info>[audit-responsibility]</info> No installed packages match platform patterns: '
+                . implode(', ', $patterns),
+                true,
+                IOInterface::VERBOSE,
+            );
+
+            return;
+        }
+
+        $this->io->writeError(
+            '<info>[audit-responsibility]</info> Platform packages: '
+            . implode(', ', $platformRoots),
+            true,
+            IOInterface::VERBOSE,
+        );
+
         $directRequires = array_values(array_map(
             static fn ($link) => $link->getTarget(),
             $rootPackage->getRequires(),

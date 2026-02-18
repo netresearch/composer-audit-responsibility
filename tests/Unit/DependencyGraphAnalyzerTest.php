@@ -28,11 +28,9 @@ final class DependencyGraphAnalyzerTest extends TestCase
     #[Test]
     public function classifyIdentifiesPlatformOnlyDependencies(): void
     {
-        // Dependency graph:
         // root requires: typo3/cms-core, my/library
         // typo3/cms-core requires: firebase/php-jwt, psr/log
         // my/library requires: guzzlehttp/guzzle
-        // firebase/php-jwt requires: (nothing)
 
         $repository = $this->createRepository([
             'typo3/cms-core' => ['firebase/php-jwt', 'psr/log'],
@@ -48,35 +46,67 @@ final class DependencyGraphAnalyzerTest extends TestCase
             directRequires: ['typo3/cms-core', 'my/library'],
         );
 
-        // Direct deps
         self::assertSame(DependencyOwnership::Direct, $result['typo3/cms-core']);
         self::assertSame(DependencyOwnership::Direct, $result['my/library']);
-
-        // Platform-only (only reachable via typo3/cms-core)
         self::assertSame(DependencyOwnership::PlatformOnly, $result['firebase/php-jwt']);
         self::assertSame(DependencyOwnership::PlatformOnly, $result['psr/log']);
-
-        // User transitive (only reachable via my/library)
         self::assertSame(DependencyOwnership::UserTransitive, $result['guzzlehttp/guzzle']);
     }
 
     #[Test]
-    public function classifyIdentifiesSharedDependencies(): void
+    public function classifyTreatsUserDepsReachingPlatformAsBarrier(): void
     {
-        // Both paths reach psr/log
-        // typo3/cms-core → psr/log
-        // my/library → psr/log
+        // The key scenario: user requires typo3/cms-backend AND typo3/cms-core
+        // Both are platform packages. typo3/cms-backend → typo3/cms-core → firebase/php-jwt
+        // User BFS should NOT traverse into platform packages, so firebase/php-jwt
+        // should be PlatformOnly, not Shared.
+
+        $repository = $this->createRepository([
+            'typo3/cms-core' => ['firebase/php-jwt', 'psr/log'],
+            'typo3/cms-backend' => ['typo3/cms-core', 'typo3/cms-extbase'],
+            'typo3/cms-extbase' => ['typo3/cms-core'],
+            'firebase/php-jwt' => [],
+            'psr/log' => [],
+            'my/library' => ['guzzlehttp/guzzle'],
+            'guzzlehttp/guzzle' => [],
+        ]);
+
+        $result = $this->analyzer->classify(
+            $repository,
+            platformRoots: ['typo3/cms-core', 'typo3/cms-backend', 'typo3/cms-extbase'],
+            directRequires: ['typo3/cms-core', 'typo3/cms-backend', 'my/library'],
+        );
+
+        // All typo3/* are platform roots → Direct
+        self::assertSame(DependencyOwnership::Direct, $result['typo3/cms-core']);
+        self::assertSame(DependencyOwnership::Direct, $result['typo3/cms-backend']);
+        self::assertSame(DependencyOwnership::Direct, $result['typo3/cms-extbase']);
+        self::assertSame(DependencyOwnership::Direct, $result['my/library']);
+
+        // firebase/php-jwt is only reachable via platform → PlatformOnly
+        self::assertSame(DependencyOwnership::PlatformOnly, $result['firebase/php-jwt']);
+        self::assertSame(DependencyOwnership::PlatformOnly, $result['psr/log']);
+
+        // guzzle is only reachable via user → UserTransitive
+        self::assertSame(DependencyOwnership::UserTransitive, $result['guzzlehttp/guzzle']);
+    }
+
+    #[Test]
+    public function classifyIdentifiesSharedWhenUserDepAlsoRequiresPackage(): void
+    {
+        // User's own dep (not a platform package) also requires psr/log
+        // → psr/log is Shared because user has a non-platform path to it
 
         $repository = $this->createRepository([
             'typo3/cms-core' => ['psr/log'],
-            'my/library' => ['psr/log'],
+            'my/logging-lib' => ['psr/log'],
             'psr/log' => [],
         ]);
 
         $result = $this->analyzer->classify(
             $repository,
             platformRoots: ['typo3/cms-core'],
-            directRequires: ['typo3/cms-core', 'my/library'],
+            directRequires: ['typo3/cms-core', 'my/logging-lib'],
         );
 
         self::assertSame(DependencyOwnership::Shared, $result['psr/log']);
@@ -86,7 +116,6 @@ final class DependencyGraphAnalyzerTest extends TestCase
     public function classifyHandlesDeepTransitiveChains(): void
     {
         // typo3/cms-core → symfony/mailer → symfony/mime → league/html-to-markdown
-        // None of these are direct deps of the user
 
         $repository = $this->createRepository([
             'typo3/cms-core' => ['symfony/mailer'],
@@ -109,15 +138,13 @@ final class DependencyGraphAnalyzerTest extends TestCase
     #[Test]
     public function classifyHandlesCircularDependencies(): void
     {
-        // a → b → c → a (cycle)
         $repository = $this->createRepository([
             'typo3/cms-core' => ['vendor/a'],
             'vendor/a' => ['vendor/b'],
             'vendor/b' => ['vendor/c'],
-            'vendor/c' => ['vendor/a'], // cycle back to a
+            'vendor/c' => ['vendor/a'], // cycle
         ]);
 
-        // Should not infinite loop
         $result = $this->analyzer->classify(
             $repository,
             platformRoots: ['typo3/cms-core'],
@@ -192,30 +219,8 @@ final class DependencyGraphAnalyzerTest extends TestCase
     }
 
     #[Test]
-    public function classifySkipsPhpExtensions(): void
-    {
-        // typo3/cms-core requires php, ext-json (should be skipped)
-        $repository = $this->createRepository([
-            'typo3/cms-core' => ['firebase/php-jwt'],
-            'firebase/php-jwt' => [],
-        ]);
-
-        // Add php and ext-json to the requires of typo3/cms-core
-        // These should be ignored (no slash = skipped)
-        $result = $this->analyzer->classify(
-            $repository,
-            platformRoots: ['typo3/cms-core'],
-            directRequires: ['typo3/cms-core'],
-        );
-
-        self::assertArrayNotHasKey('php', $result);
-        self::assertArrayNotHasKey('ext-json', $result);
-    }
-
-    #[Test]
     public function classifyWithMultiplePlatformRoots(): void
     {
-        // Two platform roots: typo3/cms-core and typo3/cms-backend
         $repository = $this->createRepository([
             'typo3/cms-core' => ['firebase/php-jwt'],
             'typo3/cms-backend' => ['typo3/cms-core', 'vendor/unique-backend-dep'],
@@ -237,10 +242,58 @@ final class DependencyGraphAnalyzerTest extends TestCase
         self::assertSame(DependencyOwnership::PlatformOnly, $result['vendor/unique-backend-dep']);
     }
 
+    #[Test]
+    public function realWorldTypo3Scenario(): void
+    {
+        // Simulates actual t3x-nr-passkeys-be dependency graph
+        $repository = $this->createRepository([
+            'typo3/cms-core' => ['firebase/php-jwt', 'psr/log', 'symfony/console', 'doctrine/dbal'],
+            'typo3/cms-backend' => ['typo3/cms-core', 'typo3/cms-extbase'],
+            'typo3/cms-setup' => ['typo3/cms-core'],
+            'typo3/cms-extbase' => ['typo3/cms-core'],
+            'firebase/php-jwt' => [],
+            'psr/log' => [],
+            'symfony/console' => ['psr/log'],
+            'doctrine/dbal' => ['psr/log'],
+            'web-auth/webauthn-lib' => ['psr/http-factory', 'spomky-labs/cbor-php'],
+            'psr/http-factory' => [],
+            'spomky-labs/cbor-php' => [],
+        ]);
+
+        // All typo3/cms-* are platform roots (resolved from pattern)
+        $platformRoots = ['typo3/cms-core', 'typo3/cms-backend', 'typo3/cms-setup', 'typo3/cms-extbase'];
+        $directRequires = ['typo3/cms-core', 'typo3/cms-backend', 'typo3/cms-setup', 'web-auth/webauthn-lib'];
+
+        $result = $this->analyzer->classify($repository, $platformRoots, $directRequires);
+
+        // Direct deps
+        self::assertSame(DependencyOwnership::Direct, $result['typo3/cms-core']);
+        self::assertSame(DependencyOwnership::Direct, $result['typo3/cms-backend']);
+        self::assertSame(DependencyOwnership::Direct, $result['typo3/cms-setup']);
+        self::assertSame(DependencyOwnership::Direct, $result['typo3/cms-extbase']);
+        self::assertSame(DependencyOwnership::Direct, $result['web-auth/webauthn-lib']);
+
+        // Platform-only transitives (only reachable through typo3/cms-*)
+        self::assertSame(DependencyOwnership::PlatformOnly, $result['firebase/php-jwt']);
+        self::assertSame(DependencyOwnership::PlatformOnly, $result['symfony/console']);
+        self::assertSame(DependencyOwnership::PlatformOnly, $result['doctrine/dbal']);
+
+        // psr/log is reachable via platform (typo3/cms-core) AND NOT via user
+        // (web-auth/webauthn-lib does NOT require psr/log) → PlatformOnly
+        self::assertSame(DependencyOwnership::PlatformOnly, $result['psr/log']);
+
+        // User-only transitives (only reachable through web-auth/webauthn-lib)
+        self::assertSame(DependencyOwnership::UserTransitive, $result['psr/http-factory']);
+        self::assertSame(DependencyOwnership::UserTransitive, $result['spomky-labs/cbor-php']);
+
+        // Platform-only list should include the framework's transitives
+        $platformOnly = $this->analyzer->getPlatformOnlyPackages($repository, $platformRoots, $directRequires);
+        sort($platformOnly);
+        self::assertSame(['doctrine/dbal', 'firebase/php-jwt', 'psr/log', 'symfony/console'], $platformOnly);
+    }
+
     /**
-     * Create a mock repository from a dependency adjacency list.
-     *
-     * @param array<string, list<string>> $adjacency Package name → list of required package names
+     * @param array<string, list<string>> $adjacency
      */
     private function createRepository(array $adjacency): RepositoryInterface
     {

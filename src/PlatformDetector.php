@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace Netresearch\ComposerAuditResponsibility;
 
 use Composer\Package\RootPackageInterface;
+use Composer\Repository\RepositoryInterface;
 
 /**
  * Detects platform/framework packages from the project type and explicit configuration.
  *
  * Maps Composer package types to their corresponding framework package patterns.
+ * Patterns use fnmatch-style globs (e.g., "typo3/cms-*" matches "typo3/cms-core").
  * Explicit configuration in extra.audit-responsibility.upstream always takes precedence.
  */
 final class PlatformDetector
@@ -17,39 +19,41 @@ final class PlatformDetector
     /**
      * Known Composer type → framework package pattern mappings.
      *
+     * Values are fnmatch patterns that match against installed package names.
+     *
      * @var array<string, list<string>>
      */
     private const TYPE_MAP = [
-        'typo3-cms-extension'    => ['typo3/cms-core'],
-        'symfony-bundle'         => ['symfony/framework-bundle', 'symfony/http-kernel'],
-        'drupal-module'          => ['drupal/core'],
-        'drupal-theme'           => ['drupal/core'],
-        'drupal-profile'         => ['drupal/core'],
-        'drupal-drush'           => ['drupal/core'],
-        'wordpress-plugin'       => ['johnpbloch/wordpress-core', 'roots/wordpress'],
-        'wordpress-theme'        => ['johnpbloch/wordpress-core', 'roots/wordpress'],
-        'wordpress-muplugin'     => ['johnpbloch/wordpress-core', 'roots/wordpress'],
-        'magento2-module'        => ['magento/framework'],
-        'magento2-theme'         => ['magento/framework'],
-        'magento2-language'      => ['magento/framework'],
-        'magento2-library'       => ['magento/framework'],
-        'shopware-platform-plugin' => ['shopware/core'],
-        'contao-bundle'          => ['contao/core-bundle'],
-        'laravel-package'        => ['laravel/framework'],
-        'cakephp-plugin'         => ['cakephp/cakephp'],
-        'yii2-extension'         => ['yiisoft/yii2'],
-        'neos-plugin'            => ['neos/neos'],
-        'neos-package'           => ['neos/flow'],
-        'flow-package'           => ['neos/flow'],
-        'oroplatform-bundle'     => ['oro/platform'],
-        'silverstripe-vendormodule' => ['silverstripe/framework'],
-        'pimcore-bundle'         => ['pimcore/pimcore'],
+        'typo3-cms-extension'      => ['typo3/cms-*'],
+        'symfony-bundle'           => ['symfony/*'],
+        'drupal-module'            => ['drupal/core', 'drupal/core-*'],
+        'drupal-theme'             => ['drupal/core', 'drupal/core-*'],
+        'drupal-profile'           => ['drupal/core', 'drupal/core-*'],
+        'drupal-drush'             => ['drupal/core', 'drupal/core-*'],
+        'wordpress-plugin'         => ['johnpbloch/wordpress-core', 'roots/wordpress', 'wordpress/*'],
+        'wordpress-theme'          => ['johnpbloch/wordpress-core', 'roots/wordpress', 'wordpress/*'],
+        'wordpress-muplugin'       => ['johnpbloch/wordpress-core', 'roots/wordpress', 'wordpress/*'],
+        'magento2-module'          => ['magento/framework', 'magento/module-*'],
+        'magento2-theme'           => ['magento/framework', 'magento/module-*'],
+        'magento2-language'        => ['magento/framework'],
+        'magento2-library'         => ['magento/framework'],
+        'shopware-platform-plugin' => ['shopware/*'],
+        'contao-bundle'            => ['contao/*'],
+        'laravel-package'          => ['laravel/*', 'illuminate/*'],
+        'cakephp-plugin'           => ['cakephp/*'],
+        'yii2-extension'           => ['yiisoft/*'],
+        'neos-plugin'              => ['neos/*'],
+        'neos-package'             => ['neos/*'],
+        'flow-package'             => ['neos/*'],
+        'oroplatform-bundle'       => ['oro/*'],
+        'silverstripe-vendormodule' => ['silverstripe/*'],
+        'pimcore-bundle'           => ['pimcore/*'],
     ];
 
     /**
-     * Detect platform root packages from the root package type and explicit config.
+     * Detect platform package patterns from the root package type and explicit config.
      *
-     * @return list<string> Package names identified as platform/upstream packages
+     * @return list<string> Package name patterns (may contain * globs)
      */
     public function detect(RootPackageInterface $rootPackage): array
     {
@@ -59,6 +63,31 @@ final class PlatformDetector
         }
 
         return $this->detectFromType($rootPackage->getType());
+    }
+
+    /**
+     * Resolve patterns against installed packages to get actual package names.
+     *
+     * @param list<string>        $patterns   Patterns from detect() (may contain * globs)
+     * @param RepositoryInterface $repository Installed/locked package repository
+     *
+     * @return list<string> Resolved package names
+     */
+    public function resolvePatterns(array $patterns, RepositoryInterface $repository): array
+    {
+        $resolved = [];
+
+        foreach ($repository->getPackages() as $package) {
+            $name = $package->getName();
+            foreach ($patterns as $pattern) {
+                if (fnmatch($pattern, $name)) {
+                    $resolved[] = $name;
+                    break;
+                }
+            }
+        }
+
+        return $resolved;
     }
 
     /**
