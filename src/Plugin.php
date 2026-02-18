@@ -10,21 +10,28 @@ use Composer\IO\IOInterface;
 use Composer\Plugin\PluginEvents;
 use Composer\Plugin\PluginInterface;
 use Composer\Plugin\PreCommandRunEvent;
+use Composer\Repository\RepositoryInterface;
+use Composer\Script\Event as ScriptEvent;
+use Composer\Script\ScriptEvents;
 
 /**
  * Composer plugin implementing responsibility propagation for security audits.
  *
- * Detects platform/framework packages from the project type or explicit configuration,
- * fetches security advisories for platform-only transitive dependencies, and injects
- * their advisory IDs into Composer's config.audit.ignore with apply=block scope.
+ * On install/update: disables block-insecure so deps resolve, then runs a
+ * responsibility-aware audit post-install that fails on user-owned advisories.
  *
- * This prevents framework dependency advisories from blocking extension/library CI
- * while keeping the advisories visible in `composer audit` reports.
+ * On audit: injects ignore rules so only user-owned advisories are reported.
  */
 final class Plugin implements PluginInterface, EventSubscriberInterface
 {
+    private const INSTALL_COMMANDS = ['install', 'update', 'require', 'remove', 'create-project'];
+    private const TAG = '<info>[audit-responsibility]</info>';
+
     private ?Composer $composer = null;
     private ?IOInterface $io = null;
+
+    /** @var bool Whether block-insecure was disabled by this plugin (triggers post-install audit) */
+    private bool $blockInsecureDisabled = false;
 
     public function activate(Composer $composer, IOInterface $io): void
     {
@@ -46,13 +53,10 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
     {
         return [
             PluginEvents::PRE_COMMAND_RUN => ['onPreCommandRun', 50],
+            ScriptEvents::POST_INSTALL_CMD => ['onPostInstall', 50],
+            ScriptEvents::POST_UPDATE_CMD => ['onPostInstall', 50],
         ];
     }
-
-    /**
-     * Commands that resolve/install dependencies (subject to block-insecure).
-     */
-    private const INSTALL_COMMANDS = ['install', 'update', 'require', 'remove', 'create-project'];
 
     public function onPreCommandRun(PreCommandRunEvent $event): void
     {
@@ -72,41 +76,11 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
         $composer = $this->composer;
         $io = $this->io;
 
-        $rootPackage = $composer->getPackage();
-        $detector = new PlatformDetector();
-        $patterns = $detector->detect($rootPackage);
-
-        if ($patterns === []) {
-            $io->writeError(
-                '<info>[audit-responsibility]</info> No platform packages detected. '
-                . 'Set extra.audit-responsibility.upstream in composer.json or use a framework-specific package type.',
-                true,
-                IOInterface::VERBOSE,
-            );
-
+        if (!$this->isPlatformPackage($composer, $io)) {
             return;
         }
 
-        // Check if blocking is explicitly enabled for upstream
-        $extra = $rootPackage->getExtra();
-        /** @var array<string, mixed> $responsibilityConfig */
-        $responsibilityConfig = $extra['audit-responsibility'] ?? [];
-        $blockUpstream = $responsibilityConfig['block-upstream'] ?? false;
-        if ($blockUpstream === true) {
-            $io->writeError(
-                '<info>[audit-responsibility]</info> block-upstream is enabled, not filtering advisories.',
-                true,
-                IOInterface::VERBOSE,
-            );
-
-            return;
-        }
-
-        $locker = $composer->getLocker();
-
-        // For install/update commands: disable block-insecure so deps can resolve,
-        // regardless of whether a lock file exists. The audit command handles
-        // responsibility-aware checking separately.
+        // For install/update: disable block-insecure so deps resolve
         if ($isInstallCommand) {
             $config = $composer->getConfig();
             $config->merge([
@@ -117,35 +91,203 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
                 ],
             ]);
 
+            $this->blockInsecureDisabled = true;
+
             $io->writeError(
-                '<info>[audit-responsibility]</info> Disabled block-insecure for dependency resolution '
-                . '(platform advisories handled via composer audit).',
+                self::TAG . ' Disabled block-insecure for dependency resolution.',
                 true,
                 IOInterface::VERBOSE,
             );
         }
 
-        // For audit (and install when lock file exists): inject ignore rules
+        // For audit command: inject ignore rules if lock file exists
+        if ($isAuditCommand) {
+            $this->injectIgnoreRulesFromLockFile($composer, $io);
+        }
+    }
+
+    /**
+     * After install/update: run responsibility-aware audit.
+     *
+     * At this point the lock file exists, so we can classify the dependency
+     * graph and check for user-owned advisories.
+     */
+    public function onPostInstall(ScriptEvent $event): void
+    {
+        if (!$this->blockInsecureDisabled) {
+            return;
+        }
+
+        $composer = $event->getComposer();
+        $io = $event->getIO();
+
+        $locker = $composer->getLocker();
         if (!$locker->isLocked()) {
-            if ($isAuditCommand) {
-                $io->writeError(
-                    '<info>[audit-responsibility]</info> No lock file found, skipping responsibility analysis.',
-                    true,
-                    IOInterface::VERBOSE,
-                );
+            return;
+        }
+
+        $io->writeError('');
+        $io->writeError(self::TAG . ' Running post-install responsibility-aware security audit...');
+
+        $lockedRepository = $locker->getLockedRepository();
+        $rootPackage = $composer->getPackage();
+
+        $detector = new PlatformDetector();
+        $patterns = $detector->detect($rootPackage);
+        $platformRoots = $detector->resolvePatterns($patterns, $lockedRepository);
+
+        if ($platformRoots === []) {
+            $io->writeError(self::TAG . ' No platform packages found in lock file.');
+
+            return;
+        }
+
+        $directRequires = array_values(array_map(
+            static fn ($link) => $link->getTarget(),
+            array_merge($rootPackage->getRequires(), $rootPackage->getDevRequires()),
+        ));
+
+        $analyzer = new DependencyGraphAnalyzer();
+        $classifications = $analyzer->classify($lockedRepository, $platformRoots, $directRequires);
+
+        // Fetch ALL advisories for ALL installed packages
+        $allPackageNames = array_keys($classifications);
+        $platformNames = implode(', ', $platformRoots);
+
+        $platformOnlyPackages = [];
+        $userOwnedPackages = [];
+        foreach ($classifications as $name => $ownership) {
+            if ($ownership === DependencyOwnership::PlatformOnly) {
+                $platformOnlyPackages[] = $name;
+            } else {
+                $userOwnedPackages[] = $name;
             }
+        }
+
+        $io->writeError(sprintf(
+            self::TAG . ' Classified %d packages: %d platform-only, %d user-owned.',
+            \count($classifications),
+            \count($platformOnlyPackages),
+            \count($userOwnedPackages),
+        ), true, IOInterface::VERBOSE);
+
+        // Check for advisories on user-owned packages (these SHOULD block)
+        $fetcher = new AdvisoryFetcher();
+        $userAdvisories = $fetcher->fetchAdvisoryIds(
+            $userOwnedPackages,
+            $lockedRepository,
+            'User-owned dependency',
+        );
+
+        // Check for advisories on platform-only packages (informational)
+        $platformAdvisories = $fetcher->fetchAdvisoryIds(
+            $platformOnlyPackages,
+            $lockedRepository,
+            'Platform dependency via ' . $platformNames,
+        );
+
+        // Report platform-only advisories (suppressed)
+        if ($platformAdvisories !== []) {
+            $io->writeError(sprintf(
+                self::TAG . ' Suppressed %d advisory/ies for platform-only dependencies (framework responsibility):',
+                \count($platformAdvisories),
+            ));
+            foreach ($platformAdvisories as $advisoryId => $reason) {
+                $io->writeError(sprintf('  - %s (%s)', $advisoryId, $reason));
+            }
+        }
+
+        // Report and fail on user-owned advisories
+        if ($userAdvisories !== []) {
+            $io->writeError('');
+            $io->writeError(sprintf(
+                '<error>' . self::TAG . ' Found %d security advisory/ies in YOUR dependencies:</error>',
+                \count($userAdvisories),
+            ));
+            foreach ($userAdvisories as $advisoryId => $reason) {
+                $io->writeError(sprintf('  <error>- %s</error>', $advisoryId));
+            }
+            $io->writeError('');
+            $io->writeError('<error>These are in packages you control. Update them to resolve.</error>');
+
+            throw new \RuntimeException(sprintf(
+                '[audit-responsibility] %d security advisory/ies found in user-owned dependencies. '
+                . 'Run "composer audit" for details.',
+                \count($userAdvisories),
+            ));
+        }
+
+        if ($platformAdvisories === []) {
+            $io->writeError(self::TAG . ' No security advisories found.');
+        } else {
+            $io->writeError('');
+            $io->writeError(self::TAG . ' No security advisories in YOUR dependencies. All clear.');
+        }
+    }
+
+    /**
+     * Check if the root package is a platform/framework package type and not blocked by config.
+     */
+    private function isPlatformPackage(Composer $composer, IOInterface $io): bool
+    {
+        $rootPackage = $composer->getPackage();
+        $detector = new PlatformDetector();
+        $patterns = $detector->detect($rootPackage);
+
+        if ($patterns === []) {
+            $io->writeError(
+                self::TAG . ' No platform packages detected. '
+                . 'Set extra.audit-responsibility.upstream in composer.json or use a framework-specific package type.',
+                true,
+                IOInterface::VERBOSE,
+            );
+
+            return false;
+        }
+
+        $extra = $rootPackage->getExtra();
+        /** @var array<string, mixed> $responsibilityConfig */
+        $responsibilityConfig = $extra['audit-responsibility'] ?? [];
+        $blockUpstream = $responsibilityConfig['block-upstream'] ?? false;
+        if ($blockUpstream === true) {
+            $io->writeError(
+                self::TAG . ' block-upstream is enabled, not filtering advisories.',
+                true,
+                IOInterface::VERBOSE,
+            );
+
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * For the audit command: inject ignore rules from the lock file.
+     */
+    private function injectIgnoreRulesFromLockFile(Composer $composer, IOInterface $io): void
+    {
+        $locker = $composer->getLocker();
+        if (!$locker->isLocked()) {
+            $io->writeError(
+                self::TAG . ' No lock file found, skipping responsibility analysis.',
+                true,
+                IOInterface::VERBOSE,
+            );
 
             return;
         }
 
         $lockedRepository = $locker->getLockedRepository();
+        $rootPackage = $composer->getPackage();
 
-        // Resolve glob patterns against installed packages
+        $detector = new PlatformDetector();
+        $patterns = $detector->detect($rootPackage);
         $platformRoots = $detector->resolvePatterns($patterns, $lockedRepository);
+
         if ($platformRoots === []) {
             $io->writeError(
-                '<info>[audit-responsibility]</info> No installed packages match platform patterns: '
-                . implode(', ', $patterns),
+                self::TAG . ' No installed packages match platform patterns.',
                 true,
                 IOInterface::VERBOSE,
             );
@@ -154,13 +296,11 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
         }
 
         $io->writeError(
-            '<info>[audit-responsibility]</info> Platform packages: '
-            . implode(', ', $platformRoots),
+            self::TAG . ' Platform packages: ' . implode(', ', $platformRoots),
             true,
             IOInterface::VERBOSE,
         );
 
-        // Include both require and require-dev for complete ownership classification
         $directRequires = array_values(array_map(
             static fn ($link) => $link->getTarget(),
             array_merge($rootPackage->getRequires(), $rootPackage->getDevRequires()),
@@ -175,7 +315,7 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
 
         if ($platformOnlyPackages === []) {
             $io->writeError(
-                '<info>[audit-responsibility]</info> No platform-only transitive dependencies found.',
+                self::TAG . ' No platform-only transitive dependencies found.',
                 true,
                 IOInterface::VERBOSE,
             );
@@ -185,42 +325,18 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
 
         $platformNames = implode(', ', $platformRoots);
         $io->writeError(sprintf(
-            '<info>[audit-responsibility]</info> Detected %d platform-only transitive dependencies via %s.',
+            self::TAG . ' Detected %d platform-only transitive dependencies via %s.',
             \count($platformOnlyPackages),
             $platformNames,
         ));
-
-        $io->writeError(
-            '<info>[audit-responsibility]</info> Platform-only packages: '
-            . implode(', ', $platformOnlyPackages),
-            true,
-            IOInterface::VERBOSE,
-        );
-
-        // Fetch advisories and inject ignore rules with real advisory IDs
-        $this->injectIgnoreRules($platformOnlyPackages, $platformNames, $lockedRepository);
-    }
-
-    /**
-     * Fetch advisories for platform-only packages and inject their IDs into audit.ignore.
-     *
-     * @param list<string> $platformOnlyPackages
-     */
-    private function injectIgnoreRules(
-        array $platformOnlyPackages,
-        string $platformNames,
-        \Composer\Repository\RepositoryInterface $lockedRepository,
-    ): void {
-        \assert($this->composer !== null);
-        \assert($this->io !== null);
 
         $reason = sprintf('Platform dependency via %s (responsibility propagation)', $platformNames);
         $fetcher = new AdvisoryFetcher();
         $advisoryIgnores = $fetcher->fetchAdvisoryIds($platformOnlyPackages, $lockedRepository, $reason);
 
         if ($advisoryIgnores === []) {
-            $this->io->writeError(
-                '<info>[audit-responsibility]</info> No active advisories for platform-only packages.',
+            $io->writeError(
+                self::TAG . ' No active advisories for platform-only packages.',
                 true,
                 IOInterface::VERBOSE,
             );
@@ -228,9 +344,7 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
             return;
         }
 
-        // Inject advisory IDs into Composer's config.audit.ignore
-        // Format: { "ADVISORY-ID": "reason" } or { "ADVISORY-ID": { "reason": "...", "apply": "block" } }
-        $config = $this->composer->getConfig();
+        $config = $composer->getConfig();
         $config->merge([
             'config' => [
                 'audit' => [
@@ -240,8 +354,8 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
         ]);
 
         $advisoryIds = array_keys($advisoryIgnores);
-        $this->io->writeError(sprintf(
-            '<info>[audit-responsibility]</info> Injected %d advisory ignore rules (apply=block): %s',
+        $io->writeError(sprintf(
+            self::TAG . ' Injected %d advisory ignore rules: %s',
             \count($advisoryIds),
             implode(', ', $advisoryIds),
         ));
