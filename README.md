@@ -121,9 +121,10 @@ For projects that use `type: library` or need custom upstream declarations:
 }
 ```
 
-### Re-enable Blocking for Upstream
+### Disable the Plugin per Project
 
-If you want framework advisories to block (e.g., in a final application project):
+If you have the plugin installed globally but want a specific extension/library to opt out
+(i.e., have all advisories block normally):
 
 ```json
 {
@@ -134,6 +135,10 @@ If you want framework advisories to block (e.g., in a final application project)
     }
 }
 ```
+
+> **Note:** Application projects (`type: project` or `type: library` without explicit `upstream` config)
+> are never affected by this plugin — it only activates for framework-specific package types
+> (extensions, bundles, modules, plugins). No configuration needed to exclude them.
 
 ## How It Works
 
