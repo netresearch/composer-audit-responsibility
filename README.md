@@ -20,6 +20,35 @@ Since Composer 2.9, `composer install` blocks when any transitive dependency has
 
 This affects every framework ecosystem: Drupal modules, Symfony bundles, Laravel packages, WordPress plugins, Magento modules, Shopware plugins, and more.
 
+### What People Do Today (and Why It's Bad)
+
+**1. Disable the security check entirely**
+
+```bash
+COMPOSER_NO_SECURITY_BLOCKING=1 composer install
+```
+
+This silences **all** advisories — including ones in your own dependencies that you *can* and *should* fix. You lose the safety net completely. A real vulnerability in a package you chose goes unnoticed.
+
+**2. Manually maintain `config.audit.ignore`**
+
+```json
+{
+    "config": {
+        "audit": {
+            "ignore": {
+                "PKSA-y2cr-5h3j-g3ys": "firebase/php-jwt - framework dep",
+                "CVE-2024-XXXXX": "some-other/lib - framework dep"
+            }
+        }
+    }
+}
+```
+
+Every new advisory requires a manual commit to every affected repo. With dozens of extensions and frequent advisories, this becomes a constant maintenance burden. Worse: stale ignore entries accumulate and nobody reviews whether they're still needed — or whether they're now hiding a vulnerability in a package you *do* control.
+
+Both approaches share the same fundamental flaw: they treat security as all-or-nothing when the real question is **who is responsible for which dependency**.
+
 ## The Solution: Responsibility Propagation
 
 Security responsibility follows the dependency chain:
