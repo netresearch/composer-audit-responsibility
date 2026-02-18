@@ -54,7 +54,7 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
         $commandName = $event->getCommand();
 
         // Only act on commands that perform security blocking
-        if (!\in_array($commandName, ['install', 'update', 'require', 'remove', 'create-project'], true)) {
+        if (!\in_array($commandName, ['install', 'update', 'require', 'remove', 'create-project', 'audit'], true)) {
             return;
         }
 
