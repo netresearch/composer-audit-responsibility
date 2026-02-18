@@ -63,17 +63,25 @@ This plugin automatically detects your framework dependencies and prevents their
 
 ## Installation
 
-```bash
-composer require --dev netresearch/composer-audit-responsibility
-```
-
-If `composer require` is already blocked by an advisory, add `--no-security-blocking` for the initial install:
+This plugin must be installed **globally** — it needs to be loaded before your project's dependencies are resolved.
 
 ```bash
-composer require --dev netresearch/composer-audit-responsibility --no-security-blocking
+composer global config allow-plugins.netresearch/composer-audit-responsibility true
+composer global require netresearch/composer-audit-responsibility
 ```
 
-Once the plugin is in your lock file, subsequent `composer install` runs will handle advisory suppression automatically.
+### CI Setup (GitHub Actions)
+
+Add this step after PHP setup and before `composer install`:
+
+```yaml
+- name: Install audit-responsibility plugin
+  run: |
+    composer global config allow-plugins.netresearch/composer-audit-responsibility true
+    composer global require netresearch/composer-audit-responsibility --no-interaction
+```
+
+No changes to your project's `composer.json` are needed.
 
 ## Configuration
 
