@@ -67,6 +67,14 @@ This plugin automatically detects your framework dependencies and prevents their
 composer require --dev netresearch/composer-audit-responsibility
 ```
 
+If `composer require` is already blocked by an advisory, add `--no-security-blocking` for the initial install:
+
+```bash
+composer require --dev netresearch/composer-audit-responsibility --no-security-blocking
+```
+
+Once the plugin is in your lock file, subsequent `composer install` runs will handle advisory suppression automatically.
+
 ## Configuration
 
 ### Automatic Detection
