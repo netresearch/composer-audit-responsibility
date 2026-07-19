@@ -6,69 +6,16 @@ on:
   pull_request:
     branches: [main]
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Setup PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
-        with:
-          php-version: '8.3'
-          tools: php-cs-fixer
-          coverage: none
-
-      - name: Install dependencies
-        run: composer install --no-interaction --prefer-dist
-
-      - name: Run php-cs-fixer
-        run: composer lint
-
-  phpstan:
-    name: PHPStan
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Setup PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
-        with:
-          php-version: '8.3'
-          coverage: none
-
-      - name: Install dependencies
-        run: composer install --no-interaction --prefer-dist
-
-      - name: Run PHPStan
-        run: vendor/bin/phpstan analyse --no-progress
-
-  tests:
-    name: PHP ${{ matrix.php }}
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        php: ['8.1', '8.2', '8.3', '8.4', '8.5']
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Setup PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
-        with:
-          php-version: ${{ matrix.php }}
-          coverage: none
-
-      - name: Install dependencies
-        run: composer install --no-interaction --prefer-dist
-
-      - name: Run tests
-        run: vendor/bin/phpunit
+  php-ci:
+    permissions:
+      contents: read
+    uses: netresearch/.github/.github/workflows/php-ci.yml@main
+    with:
+      php-versions: '["8.1", "8.2", "8.3", "8.4", "8.5"]'
+      run-phpstan: true
+      run-phpunit: true
+      run-cs-fixer: true
+      cs-fixer-cmd: "composer lint"
