@@ -319,19 +319,13 @@ final class PluginTest extends TestCase
     #[Test]
     public function onPostInstallThrowsOnUserOwnedAdvisories(): void
     {
-        $callCount = 0;
         $mockFetcher = $this->createMock(AdvisoryFetcher::class);
-        $mockFetcher->method('fetchAdvisoryIds')->willReturnCallback(
-            function () use (&$callCount): array {
-                $callCount++;
-                // First call is for user-owned packages, second for platform-only
-                if ($callCount === 1) {
-                    return ['CVE-2026-9999' => 'User-owned dependency'];
-                }
-
-                return [];
-            },
-        );
+        // User-owned packages → has advisory
+        $mockFetcher->method('fetchAdvisories')->willReturn([
+            'vulnerable/package' => [['advisoryId' => 'CVE-2026-9999', 'affectedVersions' => '<2.0']],
+        ]);
+        // Platform-only → clean
+        $mockFetcher->method('fetchAdvisoryIds')->willReturn([]);
 
         $plugin = $this->createTestablePlugin($mockFetcher);
 
@@ -370,19 +364,11 @@ final class PluginTest extends TestCase
     #[Test]
     public function onPostInstallSuppressesPlatformAdvisories(): void
     {
-        $callCount = 0;
         $mockFetcher = $this->createMock(AdvisoryFetcher::class);
-        $mockFetcher->method('fetchAdvisoryIds')->willReturnCallback(
-            function () use (&$callCount): array {
-                $callCount++;
-                // First call: user-owned (no advisories)
-                if ($callCount === 1) {
-                    return [];
-                }
-                // Second call: platform-only (has advisory)
-                return ['PKSA-platform' => 'Platform dependency via typo3/cms-core'];
-            },
-        );
+        // User-owned (no advisories)
+        $mockFetcher->method('fetchAdvisories')->willReturn([]);
+        // Platform-only (has advisory)
+        $mockFetcher->method('fetchAdvisoryIds')->willReturn(['PKSA-platform' => 'Platform dependency via typo3/cms-core']);
 
         $plugin = $this->createTestablePlugin($mockFetcher);
 

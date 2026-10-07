@@ -172,13 +172,13 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         // Check for advisories on user-owned packages (these SHOULD block).
         // Filter by installed version — only advisories affecting the actual
         // installed version should block, not historical advisories for other versions.
+        // Advisories the root project ignores in its own audit/policy config do not block,
+        // exactly as they would not block Composer's own block-insecure.
         $fetcher = $this->createAdvisoryFetcher();
-        $userAdvisories = $fetcher->fetchAdvisoryIds(
-            $userOwnedPackages,
-            $lockedRepository,
-            'User-owned dependency',
-            filterByInstalledVersion: true,
+        $userPartition = RootIgnoreFilter::fromConfig($composer->getConfig())->partition(
+            $fetcher->fetchAdvisories($userOwnedPackages, $lockedRepository, filterByInstalledVersion: true),
         );
+        $userAdvisories = $userPartition['blocking'];
 
         // Check for advisories on platform-only packages (informational).
         // Also filter by installed version for accurate reporting.
@@ -197,6 +197,22 @@ class Plugin implements PluginInterface, EventSubscriberInterface
             ));
             foreach ($platformAdvisories as $advisoryId => $reason) {
                 $io->writeError(sprintf('  - %s (%s)', $advisoryId, $reason));
+            }
+        }
+
+        // Report user-owned advisories ignored by the project's own configuration
+        if ($userPartition['ignored'] !== []) {
+            $io->writeError(sprintf(
+                self::TAG . ' Ignored %d advisory/ies in YOUR dependencies per the project\'s audit/policy ignore configuration:',
+                \count($userPartition['ignored']),
+            ));
+            foreach ($userPartition['ignored'] as $ignored) {
+                $io->writeError(sprintf(
+                    '  - %s (%s): %s',
+                    $ignored['id'],
+                    $ignored['package'],
+                    $ignored['reason'] ?? 'no reason given',
+                ));
             }
         }
 
@@ -220,7 +236,7 @@ class Plugin implements PluginInterface, EventSubscriberInterface
             ));
         }
 
-        if ($platformAdvisories === []) {
+        if ($platformAdvisories === [] && $userPartition['ignored'] === []) {
             $io->writeError(self::TAG . ' No security advisories found.');
         } else {
             $io->writeError('');

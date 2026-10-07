@@ -37,6 +37,36 @@ class AdvisoryFetcher
         string $reason,
         bool $filterByInstalledVersion = false,
     ): array {
+        $result = [];
+        foreach ($this->fetchAdvisories($packageNames, $repository, $filterByInstalledVersion) as $packageAdvisories) {
+            foreach ($packageAdvisories as $advisory) {
+                $advisoryId = $advisory['advisoryId'] ?? $advisory['cve'] ?? null;
+                if (\is_string($advisoryId) && $advisoryId !== '') {
+                    $result[$advisoryId] = $reason;
+                }
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Fetch the raw Packagist advisory entries for the given packages.
+     *
+     * Same filtering as fetchAdvisoryIds(); entries are returned unchanged so callers
+     * can match them on advisory ID, CVE, remote IDs or severity.
+     *
+     * @param list<string>        $packageNames             Package names to check
+     * @param RepositoryInterface $repository               Locked repository with installed versions
+     * @param bool                $filterByInstalledVersion Whether to filter by installed version
+     *
+     * @return array<string, list<array<mixed>>> Package name => advisory entries
+     */
+    public function fetchAdvisories(
+        array $packageNames,
+        RepositoryInterface $repository,
+        bool $filterByInstalledVersion = false,
+    ): array {
         if ($packageNames === []) {
             return [];
         }
@@ -95,7 +125,7 @@ class AdvisoryFetcher
                     }
                 }
 
-                $result[$advisoryId] = $reason;
+                $result[$packageName][] = $advisory;
             }
         }
 
