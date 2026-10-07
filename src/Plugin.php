@@ -10,6 +10,7 @@ use Composer\IO\IOInterface;
 use Composer\Plugin\PluginEvents;
 use Composer\Plugin\PluginInterface;
 use Composer\Plugin\PreCommandRunEvent;
+use Composer\Policy\PolicyConfig;
 use Composer\Script\Event as ScriptEvent;
 use Composer\Script\ScriptEvents;
 
@@ -172,13 +173,14 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         // Check for advisories on user-owned packages (these SHOULD block).
         // Filter by installed version — only advisories affecting the actual
         // installed version should block, not historical advisories for other versions.
+        // Advisories the root project ignores in its own audit/policy config do not block,
+        // exactly as they would not block Composer's own block-insecure.
         $fetcher = $this->createAdvisoryFetcher();
-        $userAdvisories = $fetcher->fetchAdvisoryIds(
-            $userOwnedPackages,
-            $lockedRepository,
-            'User-owned dependency',
-            filterByInstalledVersion: true,
+        $rootIgnoreFilter = RootIgnoreFilter::fromConfig($composer->getConfig());
+        $userPartition = $rootIgnoreFilter->partition(
+            $fetcher->fetchAdvisories($userOwnedPackages, $lockedRepository, filterByInstalledVersion: true),
         );
+        $userAdvisories = $userPartition['blocking'];
 
         // Check for advisories on platform-only packages (informational).
         // Also filter by installed version for accurate reporting.
@@ -198,6 +200,37 @@ class Plugin implements PluginInterface, EventSubscriberInterface
             foreach ($platformAdvisories as $advisoryId => $reason) {
                 $io->writeError(sprintf('  - %s (%s)', $advisoryId, $reason));
             }
+        }
+
+        // Report user-owned advisories ignored by the project's own configuration
+        if ($userPartition['ignored'] !== []) {
+            $io->writeError(sprintf(
+                self::TAG . ' Ignored %d advisory/ies in YOUR dependencies per the project\'s audit/policy ignore configuration:',
+                \count($userPartition['ignored']),
+            ));
+            foreach ($userPartition['ignored'] as $ignored) {
+                $io->writeError(sprintf(
+                    '  - %s (%s): %s',
+                    $ignored['id'],
+                    $ignored['package'],
+                    $ignored['reason'] ?? 'no reason given',
+                ));
+            }
+        }
+
+        // The project disabled advisory blocking itself: report, do not fail
+        if ($userAdvisories !== [] && !$rootIgnoreFilter->blocksAdvisories()) {
+            $io->writeError('');
+            $io->writeError(sprintf(
+                '<warning>' . self::TAG . ' Found %d security advisory/ies in YOUR dependencies; not blocking, '
+                . 'the project\'s policy/audit config disables advisory blocking:</warning>',
+                \count($userAdvisories),
+            ));
+            foreach (array_keys($userAdvisories) as $advisoryId) {
+                $io->writeError(sprintf('  <warning>- %s</warning>', $advisoryId));
+            }
+
+            return;
         }
 
         // Report and fail on user-owned advisories
@@ -220,7 +253,7 @@ class Plugin implements PluginInterface, EventSubscriberInterface
             ));
         }
 
-        if ($platformAdvisories === []) {
+        if ($platformAdvisories === [] && $userPartition['ignored'] === []) {
             $io->writeError(self::TAG . ' No security advisories found.');
         } else {
             $io->writeError('');
@@ -350,13 +383,44 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         }
 
         $config = $composer->getConfig();
-        $config->merge([
-            'config' => [
-                'audit' => [
-                    'ignore' => $advisoryIgnores,
+        $policy = class_exists(PolicyConfig::class) ? $config->get('policy') : null;
+        $advisoriesPolicy = \is_array($policy) ? $policy['advisories'] ?? null : null;
+
+        if ($policy === false || $advisoriesPolicy === false) {
+            // Advisories are switched off for the project; merging a policy list here would re-enable them.
+            $io->writeError(
+                self::TAG . ' Advisory policy is disabled for this project, nothing to inject.',
+                true,
+                IOInterface::VERBOSE,
+            );
+
+            return;
+        }
+
+        if ($advisoriesPolicy !== null) {
+            // With policy.advisories set, Composer 2.10+ does not read audit.ignore at all,
+            // so the rules go into the policy's ignore-id list, scoped to the audit.
+            // The project's own entries for the same ID keep their reason.
+            $projectIgnoreIds = \is_array($advisoriesPolicy) && \is_array($advisoriesPolicy['ignore-id'] ?? null)
+                ? $advisoriesPolicy['ignore-id']
+                : [];
+            $ignoreId = [];
+            foreach ($advisoryIgnores as $advisoryId => $advisoryReason) {
+                if (!\array_key_exists($advisoryId, $projectIgnoreIds)) {
+                    $ignoreId[$advisoryId] = ['reason' => $advisoryReason, 'on-block' => false];
+                }
+            }
+
+            $config->merge(['config' => ['policy' => ['advisories' => ['ignore-id' => $ignoreId]]]]);
+        } else {
+            $config->merge([
+                'config' => [
+                    'audit' => [
+                        'ignore' => $advisoryIgnores,
+                    ],
                 ],
-            ],
-        ]);
+            ]);
+        }
 
         $advisoryIds = array_keys($advisoryIgnores);
         $io->writeError(sprintf(

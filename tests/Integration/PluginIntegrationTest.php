@@ -72,19 +72,13 @@ final class PluginIntegrationTest extends TestCase
     #[Test]
     public function fullInstallFlowThrowsOnUserAdvisories(): void
     {
-        $callCount = 0;
         $mockFetcher = $this->createMock(AdvisoryFetcher::class);
-        $mockFetcher->method('fetchAdvisoryIds')->willReturnCallback(
-            function () use (&$callCount): array {
-                $callCount++;
-                // First call: user-owned packages → has advisory
-                if ($callCount === 1) {
-                    return ['CVE-2026-0001' => 'User-owned dependency'];
-                }
-                // Second call: platform-only → clean
-                return [];
-            },
-        );
+        // User-owned packages → has advisory
+        $mockFetcher->method('fetchAdvisories')->willReturn([
+            'vulnerable/dep' => [['advisoryId' => 'CVE-2026-0001', 'affectedVersions' => '<2.0']],
+        ]);
+        // Platform-only → clean
+        $mockFetcher->method('fetchAdvisoryIds')->willReturn([]);
 
         $io = $this->createMock(IOInterface::class);
         $composer = $this->createComposer(
@@ -119,19 +113,11 @@ final class PluginIntegrationTest extends TestCase
     #[Test]
     public function fullInstallFlowSuppressesPlatformAdvisories(): void
     {
-        $callCount = 0;
         $mockFetcher = $this->createMock(AdvisoryFetcher::class);
-        $mockFetcher->method('fetchAdvisoryIds')->willReturnCallback(
-            function () use (&$callCount): array {
-                $callCount++;
-                // First call: user-owned → clean
-                if ($callCount === 1) {
-                    return [];
-                }
-                // Second call: platform-only → has advisory (suppressed)
-                return ['PKSA-fw-123' => 'Platform dependency via typo3/cms-core'];
-            },
-        );
+        // User-owned → clean
+        $mockFetcher->method('fetchAdvisories')->willReturn([]);
+        // Platform-only → has advisory (suppressed)
+        $mockFetcher->method('fetchAdvisoryIds')->willReturn(['PKSA-fw-123' => 'Platform dependency via typo3/cms-core']);
 
         $io = $this->createMock(IOInterface::class);
         $composer = $this->createComposer(

@@ -136,6 +136,21 @@ If you have the plugin installed globally but want a specific extension/library 
 }
 ```
 
+### Advisories Your Project Already Accepted
+
+Advisories that your own `composer.json` ignores do not block the post-install audit either. The plugin
+asks Composer for the ignore rules that apply when blocking, so the same entries count as for
+Composer's own `block-insecure`: `config.policy.advisories.ignore` (package names),
+`ignore-id` (advisory ID, CVE or GHSA ID) and `ignore-severity`, or the legacy `config.audit.ignore`
+and `config.audit.ignore-severity` when `policy.advisories` is not set. Entries scoped to the audit
+only (`"on-block": false`, `"apply": "audit"`) still block. Ignored advisories are listed with
+their reason in the install output. On Composer older than 2.10, which has no `policy` config, the
+plugin reads `config.audit.ignore` and `config.audit.ignore-severity` itself.
+
+If the project turns advisory blocking off (`"policy": false`, `"policy": {"advisories": false}`,
+`"policy": {"advisories": {"block": false}}`, or the legacy `"audit": {"block-insecure": false}`),
+the post-install audit lists advisories as a warning and does not fail.
+
 > **Note:** Application projects (`type: project` or `type: library` without explicit `upstream` config)
 > are never affected by this plugin — it only activates for framework-specific package types
 > (extensions, bundles, modules, plugins). No configuration needed to exclude them.
