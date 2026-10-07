@@ -10,6 +10,7 @@ use Composer\IO\IOInterface;
 use Composer\Plugin\PluginEvents;
 use Composer\Plugin\PluginInterface;
 use Composer\Plugin\PreCommandRunEvent;
+use Composer\Policy\PolicyConfig;
 use Composer\Script\Event as ScriptEvent;
 use Composer\Script\ScriptEvents;
 
@@ -382,13 +383,44 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         }
 
         $config = $composer->getConfig();
-        $config->merge([
-            'config' => [
-                'audit' => [
-                    'ignore' => $advisoryIgnores,
+        $policy = class_exists(PolicyConfig::class) ? $config->get('policy') : null;
+        $advisoriesPolicy = \is_array($policy) ? $policy['advisories'] ?? null : null;
+
+        if ($policy === false || $advisoriesPolicy === false) {
+            // Advisories are switched off for the project; merging a policy list here would re-enable them.
+            $io->writeError(
+                self::TAG . ' Advisory policy is disabled for this project, nothing to inject.',
+                true,
+                IOInterface::VERBOSE,
+            );
+
+            return;
+        }
+
+        if ($advisoriesPolicy !== null) {
+            // With policy.advisories set, Composer 2.10+ does not read audit.ignore at all,
+            // so the rules go into the policy's ignore-id list, scoped to the audit.
+            // The project's own entries for the same ID keep their reason.
+            $projectIgnoreIds = \is_array($advisoriesPolicy) && \is_array($advisoriesPolicy['ignore-id'] ?? null)
+                ? $advisoriesPolicy['ignore-id']
+                : [];
+            $ignoreId = [];
+            foreach ($advisoryIgnores as $advisoryId => $advisoryReason) {
+                if (!\array_key_exists($advisoryId, $projectIgnoreIds)) {
+                    $ignoreId[$advisoryId] = ['reason' => $advisoryReason, 'on-block' => false];
+                }
+            }
+
+            $config->merge(['config' => ['policy' => ['advisories' => ['ignore-id' => $ignoreId]]]]);
+        } else {
+            $config->merge([
+                'config' => [
+                    'audit' => [
+                        'ignore' => $advisoryIgnores,
+                    ],
                 ],
-            ],
-        ]);
+            ]);
+        }
 
         $advisoryIds = array_keys($advisoryIgnores);
         $io->writeError(sprintf(

@@ -12,6 +12,7 @@ use Composer\Package\Locker;
 use Composer\Package\Package;
 use Composer\Package\RootPackage;
 use Composer\Plugin\PreCommandRunEvent;
+use Composer\Policy\PolicyConfig;
 use Composer\Repository\LockArrayRepository;
 use Composer\Script\Event as ScriptEvent;
 use Composer\Semver\Constraint\MatchAllConstraint;
@@ -39,6 +40,7 @@ final class RootIgnoreConfigTest extends TestCase
     private const SF_REGISTER = 'PKSA-1gw5-qx8s-xyvr';
     private const CMS_CORE = 'PKSA-2yr3-by9d-r1gh';
     private const CMS_BACKEND = 'PKSA-745m-816f-bzfy';
+    private const PHP_JWT = 'PKSA-y2cr-5h3j-g3ys';
 
     /** Only evoweb/sf-register 12.0.1 is affected; TYPO3 12.4.49 has no open advisory in the fixture */
     private const SF_REGISTER_VULNERABLE = [
@@ -217,6 +219,53 @@ final class RootIgnoreConfigTest extends TestCase
         self::assertInstanceOf(\RuntimeException::class, $exception);
     }
 
+    // `composer audit`: platform-only advisories are injected as ignores where Composer reads them
+
+    #[Test]
+    public function auditInjectionLandsInThePolicyListWhenPolicyAdvisoriesIsSet(): void
+    {
+        $config = $this->runAudit(['policy' => ['advisories' => ['ignore' => ['typo3/cms-core' => 'accepted']]]]);
+
+        $auditIgnores = PolicyConfig::fromConfig($config)->advisories->getIgnoreListForOperation('audit');
+        self::assertArrayHasKey(self::PHP_JWT, $auditIgnores);
+        self::assertStringContainsString('Platform dependency via typo3/cms-core', (string) $auditIgnores[self::PHP_JWT]);
+        self::assertSame('accepted', $auditIgnores['typo3/cms-core']);
+        self::assertArrayNotHasKey(
+            self::PHP_JWT,
+            PolicyConfig::fromConfig($config)->advisories->getIgnoreListForOperation('block'),
+            'injected for the audit only',
+        );
+    }
+
+    #[Test]
+    public function auditInjectionKeepsTheProjectsOwnReasonForTheSameId(): void
+    {
+        $config = $this->runAudit(['policy' => ['advisories' => ['ignore-id' => [self::PHP_JWT => 'project reason']]]]);
+
+        self::assertSame(
+            'project reason',
+            PolicyConfig::fromConfig($config)->advisories->getIgnoreListForOperation('audit')[self::PHP_JWT] ?? null,
+        );
+    }
+
+    #[Test]
+    public function auditInjectionStillUsesAuditIgnoreWithoutPolicyAdvisories(): void
+    {
+        $config = $this->runAudit([]);
+
+        self::assertArrayHasKey(self::PHP_JWT, PolicyConfig::fromConfig($config)->advisories->getIgnoreListForOperation('audit'));
+    }
+
+    #[Test]
+    public function auditInjectionDoesNotReEnableADisabledAdvisoryPolicy(): void
+    {
+        $config = $this->runAudit(['policy' => ['advisories' => false]]);
+
+        $advisories = PolicyConfig::fromConfig($config)->advisories;
+        self::assertSame('ignore', $advisories->audit);
+        self::assertFalse($advisories->block);
+    }
+
     // Fallback used when Composer has no PolicyConfig (Composer < 2.10)
 
     #[Test]
@@ -315,8 +364,78 @@ final class RootIgnoreConfigTest extends TestCase
         $composer->method('getConfig')->willReturn($config);
 
         $io = new BufferIO();
+        $plugin = $this->createFixturePlugin();
+        $plugin->activate($composer, $io);
+
+        $preEvent = $this->createStub(PreCommandRunEvent::class);
+        $preEvent->method('getCommand')->willReturn('install');
+        $plugin->onPreCommandRun($preEvent);
+
+        $postEvent = $this->createStub(ScriptEvent::class);
+        $postEvent->method('getComposer')->willReturn($composer);
+        $postEvent->method('getIO')->willReturn($io);
+
+        $exception = null;
+        try {
+            $plugin->onPostInstall($postEvent);
+        } catch (\RuntimeException $e) {
+            $exception = $e;
+        }
+
+        return [$exception, $io->getOutput()];
+    }
+
+    /**
+     * Run the plugin's pre-command hook for `composer audit` on a project whose
+     * locked firebase/php-jwt 6.11.1 is reachable only through typo3/cms-core.
+     *
+     * @param array<string, mixed> $projectConfig
+     */
+    private function runAudit(array $projectConfig): Config
+    {
+        $config = new Config(false);
+        $config->merge(['config' => $projectConfig]);
+
+        $rootPackage = new RootPackage('my/site', '1.0.0.0', '1.0.0');
+        $rootPackage->setType('typo3-cms-extension');
+        $rootPackage->setRequires([
+            'typo3/cms-core' => new Link('my/site', 'typo3/cms-core', new MatchAllConstraint(), Link::TYPE_REQUIRE, '*'),
+        ]);
+
+        $core = new Package('typo3/cms-core', '12.4.49.0', '12.4.49');
+        $core->setRequires([
+            'firebase/php-jwt' => new Link('typo3/cms-core', 'firebase/php-jwt', new MatchAllConstraint(), Link::TYPE_REQUIRE, '*'),
+        ]);
+
+        $locker = $this->createStub(Locker::class);
+        $locker->method('isLocked')->willReturn(true);
+        $locker->method('getLockedRepository')->willReturn(new LockArrayRepository([
+            $core,
+            new Package('firebase/php-jwt', '6.11.1.0', 'v6.11.1'),
+        ]));
+
+        $composer = $this->createStub(Composer::class);
+        $composer->method('getPackage')->willReturn($rootPackage);
+        $composer->method('getLocker')->willReturn($locker);
+        $composer->method('getConfig')->willReturn($config);
+
+        $plugin = $this->createFixturePlugin();
+        $plugin->activate($composer, new BufferIO());
+
+        $preEvent = $this->createStub(PreCommandRunEvent::class);
+        $preEvent->method('getCommand')->willReturn('audit');
+        $plugin->onPreCommandRun($preEvent);
+
+        return $config;
+    }
+
+    /**
+     * Plugin whose advisory fetcher answers from the Packagist fixture.
+     */
+    private function createFixturePlugin(): Plugin
+    {
         $fixture = $this->fixturePayload();
-        $plugin = new class ($fixture) extends Plugin {
+        return new class ($fixture) extends Plugin {
             /** @param array<string, mixed> $fixture */
             public function __construct(private array $fixture) {}
 
@@ -339,24 +458,6 @@ final class RootIgnoreConfigTest extends TestCase
                 };
             }
         };
-        $plugin->activate($composer, $io);
-
-        $preEvent = $this->createStub(PreCommandRunEvent::class);
-        $preEvent->method('getCommand')->willReturn('install');
-        $plugin->onPreCommandRun($preEvent);
-
-        $postEvent = $this->createStub(ScriptEvent::class);
-        $postEvent->method('getComposer')->willReturn($composer);
-        $postEvent->method('getIO')->willReturn($io);
-
-        $exception = null;
-        try {
-            $plugin->onPostInstall($postEvent);
-        } catch (\RuntimeException $e) {
-            $exception = $e;
-        }
-
-        return [$exception, $io->getOutput()];
     }
 
     /**
