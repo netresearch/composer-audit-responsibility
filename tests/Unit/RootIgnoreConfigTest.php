@@ -19,6 +19,7 @@ use Netresearch\ComposerAuditResponsibility\AdvisoryFetcher;
 use Netresearch\ComposerAuditResponsibility\Plugin;
 use Netresearch\ComposerAuditResponsibility\RootIgnoreFilter;
 use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 
@@ -181,6 +182,41 @@ final class RootIgnoreConfigTest extends TestCase
         self::assertStringContainsString(self::CMS_CORE . ' (typo3/cms-core): accepted', $output);
     }
 
+    /**
+     * @return iterable<string, array{array<string, mixed>}>
+     */
+    public static function advisoryBlockingDisabledProvider(): iterable
+    {
+        yield 'policy: false' => [['policy' => false]];
+        yield 'policy.advisories: false' => [['policy' => ['advisories' => false]]];
+        yield 'policy.advisories.block: false' => [['policy' => ['advisories' => ['block' => false]]]];
+        yield 'audit.block-insecure: false (no policy.advisories)' => [['audit' => ['block-insecure' => false]]];
+    }
+
+    /**
+     * @param array<string, mixed> $projectConfig
+     */
+    #[Test]
+    #[DataProvider('advisoryBlockingDisabledProvider')]
+    public function projectThatDisablesAdvisoryBlockingIsReportedNotBlocked(array $projectConfig): void
+    {
+        $output = $this->assertInstallPasses($projectConfig, self::SF_REGISTER_VULNERABLE);
+
+        self::assertStringContainsString('Found 1 security advisory/ies in YOUR dependencies; not blocking', $output);
+        self::assertStringContainsString('- ' . self::SF_REGISTER, $output);
+    }
+
+    #[Test]
+    public function policyAdvisoriesBlockTrueStillBlocks(): void
+    {
+        [$exception] = $this->runInstall(
+            ['policy' => ['advisories' => ['block' => true]], 'audit' => ['block-insecure' => false]],
+            self::SF_REGISTER_VULNERABLE,
+        );
+
+        self::assertInstanceOf(\RuntimeException::class, $exception);
+    }
+
     // Fallback used when Composer has no PolicyConfig (Composer < 2.10)
 
     #[Test]
@@ -219,6 +255,13 @@ final class RootIgnoreConfigTest extends TestCase
             [['id' => self::CMS_CORE, 'package' => 'typo3/cms-core', 'reason' => 'by remote id']],
             $partition['ignored'],
         );
+    }
+
+    #[Test]
+    public function legacyFallbackReadsBlockInsecure(): void
+    {
+        self::assertTrue($this->legacyFilter([])->blocksAdvisories());
+        self::assertFalse($this->legacyFilter(['block-insecure' => false])->blocksAdvisories());
     }
 
     // ──────────────────────────────────────────────

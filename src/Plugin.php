@@ -175,7 +175,8 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         // Advisories the root project ignores in its own audit/policy config do not block,
         // exactly as they would not block Composer's own block-insecure.
         $fetcher = $this->createAdvisoryFetcher();
-        $userPartition = RootIgnoreFilter::fromConfig($composer->getConfig())->partition(
+        $rootIgnoreFilter = RootIgnoreFilter::fromConfig($composer->getConfig());
+        $userPartition = $rootIgnoreFilter->partition(
             $fetcher->fetchAdvisories($userOwnedPackages, $lockedRepository, filterByInstalledVersion: true),
         );
         $userAdvisories = $userPartition['blocking'];
@@ -214,6 +215,21 @@ class Plugin implements PluginInterface, EventSubscriberInterface
                     $ignored['reason'] ?? 'no reason given',
                 ));
             }
+        }
+
+        // The project disabled advisory blocking itself: report, do not fail
+        if ($userAdvisories !== [] && !$rootIgnoreFilter->blocksAdvisories()) {
+            $io->writeError('');
+            $io->writeError(sprintf(
+                '<warning>' . self::TAG . ' Found %d security advisory/ies in YOUR dependencies; not blocking, '
+                . 'the project\'s policy/audit config disables advisory blocking:</warning>',
+                \count($userAdvisories),
+            ));
+            foreach (array_keys($userAdvisories) as $advisoryId) {
+                $io->writeError(sprintf('  <warning>- %s</warning>', $advisoryId));
+            }
+
+            return;
         }
 
         // Report and fail on user-owned advisories

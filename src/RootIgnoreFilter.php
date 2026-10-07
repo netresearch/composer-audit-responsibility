@@ -25,6 +25,10 @@ use Composer\Semver\VersionParser;
  * (AuditConfig changed shape several times within 2.9.x, and 2.6-2.8 have no
  * processAdvisories() at all). For those, audit.ignore and audit.ignore-severity
  * are parsed and matched here the way Composer 2.10 treats the legacy keys.
+ *
+ * It also reports whether the project lets advisories block at all
+ * (policy: false, policy.advisories: false, policy.advisories.block: false,
+ * or the legacy audit.block-insecure: false), as Composer reads it.
  */
 final class RootIgnoreFilter
 {
@@ -36,7 +40,16 @@ final class RootIgnoreFilter
         private readonly array $ignoreList,
         private readonly array $ignoredSeverities,
         private readonly bool $useComposerAuditor,
+        private readonly bool $blocking,
     ) {}
+
+    /**
+     * Whether the project's configuration lets advisories block at all.
+     */
+    public function blocksAdvisories(): bool
+    {
+        return $this->blocking;
+    }
 
     public static function fromConfig(Config $config, ?bool $usePolicyConfig = null): self
     {
@@ -49,6 +62,7 @@ final class RootIgnoreFilter
                 $advisories->getIgnoreListForOperation('block'),
                 $advisories->getIgnoreSeverityForOperation('block'),
                 true,
+                $advisories->block,
             );
         }
 
@@ -59,6 +73,7 @@ final class RootIgnoreFilter
             self::parseLegacyBlockIgnores($audit['ignore'] ?? []),
             self::parseLegacyBlockIgnores($audit['ignore-severity'] ?? []),
             false,
+            (bool) ($audit['block-insecure'] ?? true),
         );
     }
 
