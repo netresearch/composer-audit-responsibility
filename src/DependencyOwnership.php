@@ -12,6 +12,9 @@ enum DependencyOwnership: string
     /** Package is a direct dependency of the root project (user's responsibility). */
     case Direct = 'direct';
 
+    /** Package is itself an upstream framework package (e.g. typo3/cms-core), even when required directly. */
+    case Upstream = 'upstream';
+
     /** Package is reachable only through platform/upstream packages. */
     case PlatformOnly = 'platform-only';
 
@@ -25,10 +28,11 @@ enum DependencyOwnership: string
      * Whether this package's security advisories should block installation.
      *
      * Direct, Shared, and UserTransitive all block because the user has
-     * at least one dependency path they control.
+     * at least one dependency path they control. Upstream framework packages
+     * and packages reachable only through them are the framework's responsibility.
      */
     public function shouldBlock(): bool
     {
-        return $this !== self::PlatformOnly;
+        return $this !== self::PlatformOnly && $this !== self::Upstream;
     }
 }
