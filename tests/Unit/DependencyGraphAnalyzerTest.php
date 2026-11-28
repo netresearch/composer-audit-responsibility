@@ -77,10 +77,10 @@ final class DependencyGraphAnalyzerTest extends TestCase
             directRequires: ['typo3/cms-core', 'typo3/cms-backend', 'my/library'],
         );
 
-        // All typo3/* are platform roots → Direct
+        // Required typo3/* platform roots → Direct; typo3/cms-extbase is only pulled in by typo3/cms-backend
         self::assertSame(DependencyOwnership::Direct, $result['typo3/cms-core']);
         self::assertSame(DependencyOwnership::Direct, $result['typo3/cms-backend']);
-        self::assertSame(DependencyOwnership::Direct, $result['typo3/cms-extbase']);
+        self::assertSame(DependencyOwnership::PlatformOnly, $result['typo3/cms-extbase']);
         self::assertSame(DependencyOwnership::Direct, $result['my/library']);
 
         // firebase/php-jwt is only reachable via platform → PlatformOnly
@@ -282,6 +282,30 @@ final class DependencyGraphAnalyzerTest extends TestCase
     }
 
     #[Test]
+    public function classifyTreatsPlatformPackagesPulledInByTheFrameworkAsPlatformOnly(): void
+    {
+        // symfony/* matches symfony/cache, but the bundle does not require it; symfony/framework-bundle does
+        $repository = $this->createRepository([
+            'symfony/framework-bundle' => ['symfony/cache'],
+            'symfony/cache' => [],
+            'my/library' => ['symfony/console'],
+            'symfony/console' => [],
+        ]);
+
+        $result = $this->analyzer->classify(
+            $repository,
+            platformRoots: ['symfony/framework-bundle', 'symfony/cache', 'symfony/console'],
+            directRequires: ['symfony/framework-bundle', 'my/library'],
+            upstreamPackages: ['symfony/framework-bundle'],
+        );
+
+        self::assertSame(DependencyOwnership::Upstream, $result['symfony/framework-bundle']);
+        self::assertSame(DependencyOwnership::PlatformOnly, $result['symfony/cache']);
+        // A platform package the user's own library requires stays the user's responsibility
+        self::assertSame(DependencyOwnership::Shared, $result['symfony/console']);
+    }
+
+    #[Test]
     public function getNonBlockingPackagesReturnsUpstreamAndPlatformOnlyPackages(): void
     {
         $repository = $this->createRepository([
@@ -354,8 +378,10 @@ final class DependencyGraphAnalyzerTest extends TestCase
         self::assertSame(DependencyOwnership::Direct, $result['typo3/cms-core']);
         self::assertSame(DependencyOwnership::Direct, $result['typo3/cms-backend']);
         self::assertSame(DependencyOwnership::Direct, $result['typo3/cms-setup']);
-        self::assertSame(DependencyOwnership::Direct, $result['typo3/cms-extbase']);
         self::assertSame(DependencyOwnership::Direct, $result['web-auth/webauthn-lib']);
+
+        // Not required by the root, only pulled in by typo3/cms-backend
+        self::assertSame(DependencyOwnership::PlatformOnly, $result['typo3/cms-extbase']);
 
         // Platform-only transitives (only reachable through typo3/cms-*)
         self::assertSame(DependencyOwnership::PlatformOnly, $result['firebase/php-jwt']);
@@ -373,7 +399,7 @@ final class DependencyGraphAnalyzerTest extends TestCase
         // Platform-only list should include the framework's transitives
         $platformOnly = $this->analyzer->getPlatformOnlyPackages($repository, $platformRoots, $directRequires);
         sort($platformOnly);
-        self::assertSame(['doctrine/dbal', 'firebase/php-jwt', 'psr/log', 'symfony/console'], $platformOnly);
+        self::assertSame(['doctrine/dbal', 'firebase/php-jwt', 'psr/log', 'symfony/console', 'typo3/cms-extbase'], $platformOnly);
     }
 
     // ──────────────────────────────────────────────

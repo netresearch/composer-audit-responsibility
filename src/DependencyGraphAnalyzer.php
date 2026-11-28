@@ -74,13 +74,6 @@ final class DependencyGraphAnalyzer
             // Packages not reachable from either set are orphaned; skip them
         }
 
-        // Also classify platform roots themselves as Direct (user declared them)
-        foreach ($platformRoots as $root) {
-            if (isset($packageMap[$root])) {
-                $result[$root] = DependencyOwnership::Direct;
-            }
-        }
-
         // Upstream framework packages are the framework's responsibility, whichever path leads to them
         foreach ($upstreamPackages as $name) {
             if (isset($packageMap[$name])) {
