@@ -17,6 +17,8 @@ use Composer\Repository\RepositoryInterface;
  *
  * The intersection determines shared ownership; the difference determines
  * platform-only packages whose advisories should not block installation.
+ * Upstream packages (the framework packages themselves) never block, even when
+ * the root requires them directly.
  */
 final class DependencyGraphAnalyzer
 {
@@ -26,6 +28,7 @@ final class DependencyGraphAnalyzer
      * @param RepositoryInterface  $repository     Installed/locked package repository
      * @param list<string>         $platformRoots  Package names identified as platform packages
      * @param list<string>         $directRequires Package names from root require (excluding platform roots)
+     * @param list<string>         $upstreamPackages Platform roots that are framework packages themselves
      *
      * @return array<string, DependencyOwnership> Package name → ownership classification
      */
@@ -33,6 +36,7 @@ final class DependencyGraphAnalyzer
         RepositoryInterface $repository,
         array $platformRoots,
         array $directRequires,
+        array $upstreamPackages = [],
     ): array {
         $packageMap = $this->buildPackageMap($repository);
 
@@ -70,10 +74,10 @@ final class DependencyGraphAnalyzer
             // Packages not reachable from either set are orphaned; skip them
         }
 
-        // Also classify platform roots themselves as Direct (user declared them)
-        foreach ($platformRoots as $root) {
-            if (isset($packageMap[$root])) {
-                $result[$root] = DependencyOwnership::Direct;
+        // Upstream framework packages are the framework's responsibility, whichever path leads to them
+        foreach ($upstreamPackages as $name) {
+            if (isset($packageMap[$name])) {
+                $result[$name] = DependencyOwnership::Upstream;
             }
         }
 
@@ -98,6 +102,34 @@ final class DependencyGraphAnalyzer
         $result = [];
         foreach ($classifications as $name => $ownership) {
             if ($ownership === DependencyOwnership::PlatformOnly) {
+                $result[] = $name;
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Get the packages whose advisories should NOT block: platform-only packages
+     * and the upstream framework packages themselves.
+     *
+     * @param list<string> $platformRoots
+     * @param list<string> $directRequires
+     * @param list<string> $upstreamPackages
+     *
+     * @return list<string>
+     */
+    public function getNonBlockingPackages(
+        RepositoryInterface $repository,
+        array $platformRoots,
+        array $directRequires,
+        array $upstreamPackages,
+    ): array {
+        $classifications = $this->classify($repository, $platformRoots, $directRequires, $upstreamPackages);
+
+        $result = [];
+        foreach ($classifications as $name => $ownership) {
+            if (!$ownership->shouldBlock()) {
                 $result[] = $name;
             }
         }

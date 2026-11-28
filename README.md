@@ -6,7 +6,7 @@
 
 A Composer plugin implementing **responsibility propagation** for security audits.
 
-Stops upstream/framework transitive dependency advisories from blocking your library, extension, or plugin CI — while keeping them visible in audit reports.
+Stops advisories in the framework your library, extension, or plugin builds on — the framework packages themselves and everything they pull in — from blocking your CI, while keeping them visible in audit reports.
 
 ## The Problem
 
@@ -16,7 +16,8 @@ Since Composer 2.9, [`block-insecure`](https://getcomposer.org/doc/06-config.md#
 - `typo3/cms-core` transitively depends on `firebase/php-jwt`
 - When `firebase/php-jwt` gets a security advisory, **your CI breaks**
 - You have **no control** over this — you didn't choose `firebase/php-jwt`
-- The **TYPO3 team** is responsible for updating their framework dependencies
+- The same happens when `typo3/cms-core` or a system extension such as `typo3/cms-backend` gets an advisory: your extension supports a TYPO3 version range, and the fix is a TYPO3 release, not a change in your code
+- The **TYPO3 team** is responsible for the framework packages and their dependencies
 
 This affects every framework ecosystem: Drupal modules, Symfony bundles, Laravel packages, WordPress plugins, Magento modules, Shopware plugins, and more.
 
@@ -56,10 +57,10 @@ Security responsibility follows the dependency chain:
 | Role | Responsible For |
 |------|----------------|
 | **Extension/Plugin developer** | Their direct dependencies |
-| **Framework team** | Framework's transitive dependencies |
+| **Framework team** | The framework packages and their transitive dependencies |
 | **Application/Project assembler** | Everything (they ship the final product) |
 
-This plugin automatically detects your framework dependencies and prevents their transitive security advisories from blocking dependency resolution (`composer update/require/remove`). Advisories are still **reported** — they just don't **block**.
+This plugin automatically detects your framework and prevents advisories in the framework packages and in their transitive dependencies from blocking dependency resolution (`composer update/require/remove`). Advisories are still **reported** — they just don't **block**.
 
 ## Installation
 
@@ -87,29 +88,34 @@ No changes to your project's `composer.json` are needed.
 
 ### Automatic Detection
 
-The plugin auto-detects your framework from the `type` field in `composer.json`:
+The plugin auto-detects your framework from the `type` field in `composer.json`. Two lists come out of it:
 
-| Package Type | Detected Framework |
-|---|---|
-| `typo3-cms-extension` | `typo3/cms-core` |
-| `symfony-bundle` | `symfony/framework-bundle`, `symfony/http-kernel` |
-| `drupal-module` | `drupal/core` |
-| `wordpress-plugin` | `johnpbloch/wordpress-core`, `roots/wordpress` |
-| `magento2-module` | `magento/framework` |
-| `shopware-platform-plugin` | `shopware/core` |
-| `contao-bundle` | `contao/core-bundle` |
-| `cakephp-plugin` | `cakephp/cakephp` |
-| `neos-plugin` | `neos/neos` |
-| `flow-package` | `neos/flow` |
-| `oroplatform-bundle` | `oro/platform` |
-| `silverstripe-vendormodule` | `silverstripe/framework` |
-| `pimcore-bundle` | `pimcore/pimcore` |
-| `laravel-package` | `laravel/framework` |
-| `yii2-extension` | `yiisoft/yii2` |
+- **Framework packages** are upstream themselves: their own advisories do not block, even when your `require` lists them. Only packages released together with the framework are in this list.
+- **Platform packages** are where the framework's dependency tree starts: what only they pull in does not block. Your own dependencies are not followed into them.
+
+| Package Type | Framework packages | Platform packages |
+|---|---|---|
+| `typo3-cms-extension` | `typo3/cms-*` (core and system extensions) | `typo3/cms-*` |
+| `symfony-bundle` | `symfony/framework-bundle`, `symfony/http-kernel` | `symfony/*` |
+| `drupal-module`, `drupal-theme`, `drupal-profile`, `drupal-drush` | `drupal/core`, `drupal/core-*` | `drupal/core`, `drupal/core-*` |
+| `wordpress-plugin`, `wordpress-theme`, `wordpress-muplugin` | `johnpbloch/wordpress-core`, `roots/wordpress` | `johnpbloch/wordpress-core`, `roots/wordpress`, `wordpress/*` |
+| `magento2-module`, `magento2-theme` | `magento/framework` | `magento/framework`, `magento/module-*` |
+| `magento2-language`, `magento2-library` | `magento/framework` | `magento/framework` |
+| `shopware-platform-plugin` | `shopware/core`, `shopware/administration`, `shopware/storefront`, `shopware/elasticsearch` | `shopware/*` |
+| `contao-bundle` | `contao/core-bundle` | `contao/*` |
+| `laravel-package` | `laravel/framework`, `illuminate/*` | `laravel/*`, `illuminate/*` |
+| `cakephp-plugin` | `cakephp/cakephp` | `cakephp/*` |
+| `yii2-extension` | `yiisoft/yii2` | `yiisoft/*` |
+| `neos-plugin` | `neos/neos` | `neos/*` |
+| `neos-package` | `neos/neos`, `neos/flow` | `neos/*` |
+| `flow-package` | `neos/flow` | `neos/*` |
+| `oroplatform-bundle` | `oro/platform` | `oro/*` |
+| `silverstripe-vendormodule` | `silverstripe/framework` | `silverstripe/*` |
+| `pimcore-bundle` | `pimcore/pimcore` | `pimcore/*` |
 
 ### Explicit Configuration
 
-For projects that use `type: library` or need custom upstream declarations:
+For projects that use `type: library` or need custom upstream declarations. The listed packages are both: their own advisories and those of what only they pull in do not block. The list replaces the detection from `type`:
 
 ```json
 {
@@ -159,11 +165,12 @@ the post-install audit lists advisories as a warning and does not fail.
 
 1. **Detection** — Identifies platform/framework packages from your `type` or explicit config
 2. **Graph analysis** — Walks the dependency graph (BFS) to classify every package:
+   - **Upstream**: A framework package itself (e.g. `typo3/cms-core`, `typo3/cms-backend`), even when it is in your `require` — framework's responsibility
    - **Direct**: In your `require` — your responsibility
    - **Platform-only**: Only reachable through framework packages — framework's responsibility
    - **Shared**: Reachable through both your deps AND framework — your responsibility (conservative)
    - **User-transitive**: Only reachable through your non-framework deps — your responsibility
-3. **Policy enforcement** — Platform-only advisories don't block; everything else still blocks normally
+3. **Policy enforcement** — Upstream and platform-only advisories are listed but don't block; everything else still blocks normally
 
 ### The Diamond Problem
 
@@ -183,7 +190,7 @@ your-extension
 |---|---|---|---|
 | `config.audit.ignore` per advisory | Per-advisory | Update for every new advisory | Hidden |
 | `COMPOSER_NO_SECURITY_BLOCKING=1` | All deps | None | Hidden |
-| **This plugin** | Framework deps only | None (auto-detected) | Preserved |
+| **This plugin** | Framework packages and their deps only | None (auto-detected) | Preserved |
 
 ## Requirements
 

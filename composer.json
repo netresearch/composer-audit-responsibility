@@ -1,6 +1,6 @@
 {
     "name": "netresearch/composer-audit-responsibility",
-    "description": "Composer plugin implementing responsibility propagation for security audits — stops upstream/framework transitive dependency advisories from blocking library/extension CI",
+    "description": "Composer plugin implementing responsibility propagation for security audits — stops advisories in framework packages and their dependencies from blocking library/extension CI",
     "type": "composer-plugin",
     "license": "MIT",
     "keywords": [

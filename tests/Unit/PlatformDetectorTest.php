@@ -188,6 +188,71 @@ final class PlatformDetectorTest extends TestCase
     }
 
     #[Test]
+    public function detectUpstreamCoversTheWholeTypo3CmsFamily(): void
+    {
+        $rootPackage = $this->createStub(RootPackageInterface::class);
+        $rootPackage->method('getType')->willReturn('typo3-cms-extension');
+        $rootPackage->method('getExtra')->willReturn([]);
+
+        $patterns = $this->detector->detectUpstream($rootPackage);
+        $repository = $this->createRepositoryWithPackages(['typo3/cms-core', 'typo3/cms-backend', 'typo3/cms-extbase', 'firebase/php-jwt']);
+
+        self::assertSame(['typo3/cms-*'], $patterns);
+        self::assertSame(['typo3/cms-core', 'typo3/cms-backend', 'typo3/cms-extbase'], $this->detector->resolvePatterns($patterns, $repository));
+    }
+
+    #[Test]
+    public function detectUpstreamUsesTheExplicitUpstreamList(): void
+    {
+        $rootPackage = $this->createStub(RootPackageInterface::class);
+        $rootPackage->method('getType')->willReturn('library');
+        $rootPackage->method('getExtra')->willReturn([
+            'audit-responsibility' => ['upstream' => ['typo3/cms-core', 'helhum/typo3-console']],
+        ]);
+
+        self::assertSame(['typo3/cms-core', 'helhum/typo3-console'], $this->detector->detectUpstream($rootPackage));
+    }
+
+    #[Test]
+    public function detectUpstreamListsOnlyTheFrameworkPackageForVendorWideGlobs(): void
+    {
+        $rootPackage = $this->createStub(RootPackageInterface::class);
+        $rootPackage->method('getType')->willReturn('symfony-bundle');
+        $rootPackage->method('getExtra')->willReturn([]);
+
+        self::assertSame(['symfony/framework-bundle', 'symfony/http-kernel'], $this->detector->detectUpstream($rootPackage));
+    }
+
+    #[Test]
+    public function detectUpstreamReturnsEmptyForProjects(): void
+    {
+        $rootPackage = $this->createStub(RootPackageInterface::class);
+        $rootPackage->method('getType')->willReturn('project');
+        $rootPackage->method('getExtra')->willReturn([]);
+
+        self::assertSame([], $this->detector->detectUpstream($rootPackage));
+    }
+
+    #[Test]
+    public function everyUpstreamPatternIsCoveredByThePlatformPatternsOfItsType(): void
+    {
+        $typeMap = PlatformDetector::getTypeMap();
+        $upstreamMap = PlatformDetector::getUpstreamMap();
+
+        self::assertSame(array_keys($typeMap), array_keys($upstreamMap));
+        foreach ($upstreamMap as $type => $upstreamPatterns) {
+            foreach ($upstreamPatterns as $upstreamPattern) {
+                $covered = false;
+                foreach ($typeMap[$type] as $platformPattern) {
+                    // An upstream glob such as "drupal/core-*" is covered when the platform pattern matches it literally
+                    $covered = $covered || fnmatch($platformPattern, $upstreamPattern);
+                }
+                self::assertTrue($covered, sprintf('%s: %s is not a platform package', $type, $upstreamPattern));
+            }
+        }
+    }
+
+    #[Test]
     public function getTypeMapReturnsAllMappings(): void
     {
         $map = PlatformDetector::getTypeMap();

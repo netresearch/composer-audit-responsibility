@@ -88,14 +88,12 @@ final class RootIgnoreConfigTest extends TestCase
     {
         $output = $this->assertInstallPasses(
             ['policy' => ['advisories' => ['ignore' => [
-                'typo3/cms-core' => 'No patched 12.4 release',
-                'typo3/cms-backend' => 'See typo3/cms-core',
+                'evoweb/sf-register' => 'No fixed 12.x release upstream',
             ]]]],
-            self::CORE_VULNERABLE,
+            self::SF_REGISTER_VULNERABLE,
         );
 
-        self::assertStringContainsString(self::CMS_CORE . ' (typo3/cms-core): No patched 12.4 release', $output);
-        self::assertStringContainsString(self::CMS_BACKEND . ' (typo3/cms-backend): See typo3/cms-core', $output);
+        self::assertStringContainsString(self::SF_REGISTER . ' (evoweb/sf-register): No fixed 12.x release upstream', $output);
     }
 
     #[Test]
@@ -128,7 +126,9 @@ final class RootIgnoreConfigTest extends TestCase
             self::CORE_VULNERABLE + self::SF_REGISTER_VULNERABLE,
         );
 
-        self::assertStringContainsString('Ignored 3 advisory/ies', $output);
+        // The core advisories are upstream now; only the extension's own advisory needs the project's ignore
+        self::assertStringContainsString('Suppressed 2 advisory/ies', $output);
+        self::assertStringContainsString('Ignored 1 advisory/ies', $output);
     }
 
     #[Test]
@@ -136,12 +136,12 @@ final class RootIgnoreConfigTest extends TestCase
     {
         [$exception, $output] = $this->runInstall(
             ['audit' => ['ignore' => [self::SF_REGISTER => 'accepted']]],
-            ['typo3/cms-core' => '12.4.45.0'] + self::SF_REGISTER_VULNERABLE,
+            ['firebase/php-jwt' => '6.11.1.0'] + self::SF_REGISTER_VULNERABLE,
         );
 
         self::assertInstanceOf(\RuntimeException::class, $exception);
         self::assertStringContainsString('1 security advisory/ies found', $exception->getMessage());
-        self::assertStringContainsString('- ' . self::CMS_CORE, $output);
+        self::assertStringContainsString('- ' . self::PHP_JWT, $output);
         self::assertStringContainsString(self::SF_REGISTER . ' (evoweb/sf-register): accepted', $output);
     }
 
@@ -174,14 +174,14 @@ final class RootIgnoreConfigTest extends TestCase
         [$exception, $output] = $this->runInstall(
             [
                 'audit' => ['ignore' => [self::SF_REGISTER => 'accepted']],
-                'policy' => ['advisories' => ['ignore' => ['typo3/cms-core' => 'accepted']]],
+                'policy' => ['advisories' => ['ignore' => ['firebase/php-jwt' => 'accepted']]],
             ],
-            ['typo3/cms-core' => '12.4.45.0'] + self::SF_REGISTER_VULNERABLE,
+            ['firebase/php-jwt' => '6.11.1.0'] + self::SF_REGISTER_VULNERABLE,
         );
 
         self::assertInstanceOf(\RuntimeException::class, $exception);
         self::assertStringContainsString('- ' . self::SF_REGISTER, $output);
-        self::assertStringContainsString(self::CMS_CORE . ' (typo3/cms-core): accepted', $output);
+        self::assertStringContainsString(self::PHP_JWT . ' (firebase/php-jwt): accepted', $output);
     }
 
     /**
@@ -219,6 +219,87 @@ final class RootIgnoreConfigTest extends TestCase
         self::assertInstanceOf(\RuntimeException::class, $exception);
     }
 
+    // Framework packages are upstream: their advisories are reported, not blocking
+
+    #[Test]
+    public function advisoriesInTheFrameworkPackagesOfAnExtensionDoNotBlock(): void
+    {
+        // typo3/cms-core and typo3/cms-backend 12.4.45, required directly by the extension
+        $output = $this->assertInstallPasses([], self::CORE_VULNERABLE);
+
+        self::assertStringContainsString('Suppressed 2 advisory/ies in framework packages', $output);
+        self::assertStringContainsString('- ' . self::CMS_CORE . ' (', $output);
+        self::assertStringContainsString('- ' . self::CMS_BACKEND . ' (', $output);
+        self::assertStringNotContainsString('YOUR dependencies:', $output);
+    }
+
+    #[Test]
+    public function advisoryInAPackageTheExtensionChoseStillBlocksNextToFrameworkAdvisories(): void
+    {
+        [$exception, $output] = $this->runInstall(
+            [],
+            self::CORE_VULNERABLE + ['evoweb/sf-register' => '12.0.1.0'],
+        );
+
+        self::assertInstanceOf(\RuntimeException::class, $exception);
+        self::assertStringContainsString('1 security advisory/ies found', $exception->getMessage());
+        self::assertStringContainsString('- ' . self::SF_REGISTER, $output);
+        self::assertStringContainsString('Suppressed 2 advisory/ies in framework packages', $output);
+    }
+
+    #[Test]
+    public function blockUpstreamKeepsFrameworkAdvisoriesBlocking(): void
+    {
+        [$exception, $output] = $this->runInstall(
+            [],
+            self::CORE_VULNERABLE,
+            extra: ['audit-responsibility' => ['block-upstream' => true]],
+        );
+
+        // The plugin stays out of the way: Composer's own block-insecure stays on and blocks during resolution
+        self::assertNull($exception);
+        self::assertArrayNotHasKey('COMPOSER_NO_SECURITY_BLOCKING', $_SERVER);
+        self::assertSame('', $output);
+    }
+
+    #[Test]
+    public function explicitUpstreamListMakesTheListedPackagesThemselvesUpstream(): void
+    {
+        $output = $this->assertInstallPasses(
+            [],
+            ['evoweb/sf-register' => '12.0.1.0'],
+            type: 'library',
+            extra: ['audit-responsibility' => ['upstream' => ['evoweb/sf-register']]],
+        );
+
+        self::assertStringContainsString('- ' . self::SF_REGISTER . ' (', $output);
+    }
+
+    #[Test]
+    public function explicitUpstreamListReplacesTheTypeDetection(): void
+    {
+        // Only the listed package is upstream; typo3/cms-core is the extension's own choice here
+        [$exception, $output] = $this->runInstall(
+            [],
+            ['typo3/cms-core' => '12.4.45.0', 'evoweb/sf-register' => '12.0.1.0'],
+            extra: ['audit-responsibility' => ['upstream' => ['evoweb/sf-register']]],
+        );
+
+        self::assertInstanceOf(\RuntimeException::class, $exception);
+        self::assertStringContainsString('1 security advisory/ies found', $exception->getMessage());
+        self::assertStringContainsString('- ' . self::CMS_CORE, $output);
+    }
+
+    #[Test]
+    public function auditInjectionCoversTheFrameworkPackageItself(): void
+    {
+        $config = $this->runAudit([], coreVersion: '12.4.45.0');
+
+        $auditIgnores = PolicyConfig::fromConfig($config)->advisories->getIgnoreListForOperation('audit');
+        self::assertArrayHasKey(self::CMS_CORE, $auditIgnores);
+        self::assertArrayHasKey(self::PHP_JWT, $auditIgnores);
+    }
+
     // `composer audit`: platform-only advisories are injected as ignores where Composer reads them
 
     #[Test]
@@ -228,7 +309,7 @@ final class RootIgnoreConfigTest extends TestCase
 
         $auditIgnores = PolicyConfig::fromConfig($config)->advisories->getIgnoreListForOperation('audit');
         self::assertArrayHasKey(self::PHP_JWT, $auditIgnores);
-        self::assertStringContainsString('Platform dependency via typo3/cms-core', (string) $auditIgnores[self::PHP_JWT]);
+        self::assertStringContainsString('Framework responsibility via typo3/cms-core', (string) $auditIgnores[self::PHP_JWT]);
         self::assertSame('accepted', $auditIgnores['typo3/cms-core']);
         self::assertArrayNotHasKey(
             self::PHP_JWT,
@@ -320,10 +401,11 @@ final class RootIgnoreConfigTest extends TestCase
     /**
      * @param array<string, mixed>  $projectConfig "config" section of the root composer.json
      * @param array<string, string> $installed     Package name => normalized version, all required directly
+     * @param array<string, mixed>  $extra         "extra" section of the root composer.json
      */
-    private function assertInstallPasses(array $projectConfig, array $installed): string
+    private function assertInstallPasses(array $projectConfig, array $installed, string $type = 'typo3-cms-extension', array $extra = []): string
     {
-        [$exception, $output] = $this->runInstall($projectConfig, $installed);
+        [$exception, $output] = $this->runInstall($projectConfig, $installed, $type, $extra);
         if ($exception !== null) {
             self::fail('Install was blocked: ' . $exception->getMessage() . "\n" . $output);
         }
@@ -336,16 +418,18 @@ final class RootIgnoreConfigTest extends TestCase
      *
      * @param array<string, mixed>  $projectConfig
      * @param array<string, string> $installed     Package name => normalized version, all required directly
+     * @param array<string, mixed>  $extra         "extra" section of the root composer.json
      *
      * @return array{0: \RuntimeException|null, 1: string}
      */
-    private function runInstall(array $projectConfig, array $installed): array
+    private function runInstall(array $projectConfig, array $installed, string $type = 'typo3-cms-extension', array $extra = []): array
     {
         $config = new Config(false);
         $config->merge(['config' => $projectConfig]);
 
         $rootPackage = new RootPackage('my/site', '1.0.0.0', '1.0.0');
-        $rootPackage->setType('typo3-cms-extension');
+        $rootPackage->setType($type);
+        $rootPackage->setExtra($extra);
         $links = [];
         $packages = [];
         foreach ($installed as $name => $version) {
@@ -391,7 +475,7 @@ final class RootIgnoreConfigTest extends TestCase
      *
      * @param array<string, mixed> $projectConfig
      */
-    private function runAudit(array $projectConfig): Config
+    private function runAudit(array $projectConfig, string $coreVersion = '12.4.49.0'): Config
     {
         $config = new Config(false);
         $config->merge(['config' => $projectConfig]);
@@ -402,7 +486,7 @@ final class RootIgnoreConfigTest extends TestCase
             'typo3/cms-core' => new Link('my/site', 'typo3/cms-core', new MatchAllConstraint(), Link::TYPE_REQUIRE, '*'),
         ]);
 
-        $core = new Package('typo3/cms-core', '12.4.49.0', '12.4.49');
+        $core = new Package('typo3/cms-core', $coreVersion, $coreVersion);
         $core->setRequires([
             'firebase/php-jwt' => new Link('typo3/cms-core', 'firebase/php-jwt', new MatchAllConstraint(), Link::TYPE_REQUIRE, '*'),
         ]);

@@ -11,7 +11,7 @@ use Composer\Semver\Semver;
  * Fetches security advisories from Packagist for specific packages.
  *
  * Uses the Packagist Security Advisories API to get current advisories,
- * then extracts advisory IDs for packages that are platform-only.
+ * then extracts advisory IDs for the requested packages.
  */
 class AdvisoryFetcher
 {

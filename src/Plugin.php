@@ -140,6 +140,8 @@ class Plugin implements PluginInterface, EventSubscriberInterface
             return;
         }
 
+        $upstreamPackages = $detector->resolvePatterns($detector->detectUpstream($rootPackage), $lockedRepository);
+
         // Only production requires for blocking classification.
         // Dev dependencies (phpunit, phpstan, etc.) don't ship with the extension;
         // their advisories are reported by `composer audit` but shouldn't block install.
@@ -149,24 +151,24 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         ));
 
         $analyzer = new DependencyGraphAnalyzer();
-        $classifications = $analyzer->classify($lockedRepository, $platformRoots, $directRequires);
+        $classifications = $analyzer->classify($lockedRepository, $platformRoots, $directRequires, $upstreamPackages);
 
         $platformNames = implode(', ', $platformRoots);
 
-        $platformOnlyPackages = [];
+        $frameworkOwnedPackages = [];
         $userOwnedPackages = [];
         foreach ($classifications as $name => $ownership) {
-            if ($ownership === DependencyOwnership::PlatformOnly) {
-                $platformOnlyPackages[] = $name;
-            } else {
+            if ($ownership->shouldBlock()) {
                 $userOwnedPackages[] = $name;
+            } else {
+                $frameworkOwnedPackages[] = $name;
             }
         }
 
         $io->writeError(sprintf(
-            self::TAG . ' Classified %d packages: %d platform-only, %d user-owned.',
+            self::TAG . ' Classified %d packages: %d framework-owned (framework packages and their dependencies), %d user-owned.',
             \count($classifications),
-            \count($platformOnlyPackages),
+            \count($frameworkOwnedPackages),
             \count($userOwnedPackages),
         ), true, IOInterface::VERBOSE);
 
@@ -182,19 +184,19 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         );
         $userAdvisories = $userPartition['blocking'];
 
-        // Check for advisories on platform-only packages (informational).
+        // Check for advisories on framework packages and their platform-only dependencies (informational).
         // Also filter by installed version for accurate reporting.
         $platformAdvisories = $fetcher->fetchAdvisoryIds(
-            $platformOnlyPackages,
+            $frameworkOwnedPackages,
             $lockedRepository,
-            'Platform dependency via ' . $platformNames,
+            'Framework responsibility via ' . $platformNames,
             filterByInstalledVersion: true,
         );
 
-        // Report platform-only advisories (suppressed)
+        // Report framework-owned advisories (suppressed)
         if ($platformAdvisories !== []) {
             $io->writeError(sprintf(
-                self::TAG . ' Suppressed %d advisory/ies for platform-only dependencies (framework responsibility):',
+                self::TAG . ' Suppressed %d advisory/ies in framework packages and their dependencies (framework responsibility):',
                 \count($platformAdvisories),
             ));
             foreach ($platformAdvisories as $advisoryId => $reason) {
@@ -345,15 +347,16 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         ));
 
         $analyzer = new DependencyGraphAnalyzer();
-        $platformOnlyPackages = $analyzer->getPlatformOnlyPackages(
+        $frameworkOwnedPackages = $analyzer->getNonBlockingPackages(
             $lockedRepository,
             $platformRoots,
             $directRequires,
+            $detector->resolvePatterns($detector->detectUpstream($rootPackage), $lockedRepository),
         );
 
-        if ($platformOnlyPackages === []) {
+        if ($frameworkOwnedPackages === []) {
             $io->writeError(
-                self::TAG . ' No platform-only transitive dependencies found.',
+                self::TAG . ' No framework packages or platform-only dependencies found.',
                 true,
                 IOInterface::VERBOSE,
             );
@@ -363,18 +366,18 @@ class Plugin implements PluginInterface, EventSubscriberInterface
 
         $platformNames = implode(', ', $platformRoots);
         $io->writeError(sprintf(
-            self::TAG . ' Detected %d platform-only transitive dependencies via %s.',
-            \count($platformOnlyPackages),
+            self::TAG . ' Detected %d framework packages and platform-only dependencies via %s.',
+            \count($frameworkOwnedPackages),
             $platformNames,
         ));
 
-        $reason = sprintf('Platform dependency via %s (responsibility propagation)', $platformNames);
+        $reason = sprintf('Framework responsibility via %s (responsibility propagation)', $platformNames);
         $fetcher = $this->createAdvisoryFetcher();
-        $advisoryIgnores = $fetcher->fetchAdvisoryIds($platformOnlyPackages, $lockedRepository, $reason);
+        $advisoryIgnores = $fetcher->fetchAdvisoryIds($frameworkOwnedPackages, $lockedRepository, $reason);
 
         if ($advisoryIgnores === []) {
             $io->writeError(
-                self::TAG . ' No active advisories for platform-only packages.',
+                self::TAG . ' No active advisories for framework packages or their dependencies.',
                 true,
                 IOInterface::VERBOSE,
             );
